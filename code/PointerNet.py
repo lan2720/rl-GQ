@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.functional as F
-
+import pickle
+import sys
 
 class Encoder(nn.Module):
     """
@@ -390,9 +391,22 @@ class PointerNet(nn.Module):
     def calc_final_dist(self, vocab_dists, attn_dists):
         vocab_dists = [p_gen * dist for (p_gen,dist) in zip(self.p_gens, vocab_dists)]
         attn_dists = [(1-p_gen) * dist for (p_gen,dist) in zip(self.p_gens, attn_dists)]
-        extra_zeros = torch.zeros((self.hps.batch_size, self.max_para_oovs)).cuda()
-        vocab_dists_extended = [torch.cat([dist, extra_zeros], dim=1) for dist in vocab_dists]
-
+        if self.max_para_oovs > 0:
+            extra_zeros = torch.zeros((self.hps.batch_size, self.max_para_oovs)).cuda()
+            vocab_dists_extended = [torch.cat([dist, extra_zeros], dim=1) for dist in vocab_dists]
+        else:
+            vocab_dists_extended = vocab_dists
+            #vocab_dists_extended = []
+            #for dist in vocab_dists:
+            #    try:
+            #        vocab_dists_extended.append(torch.cat([dist, extra_zeros], dim=1))
+            #except:
+            #    print('error!!!!!')
+            #    print('vocab dist:', dist.size())
+            #    print('extra zeros:', extra_zeros.size())
+            #    pickle.dump(dist, open('dist.pkl', 'wb'))
+            #    pickle.dump(extra_zeros, open('extra_zero.pkl', 'wb'))
+            #    sys.exit()
         extended_vsize = self.vocab_size + self.max_para_oovs
         attn_dists_projected =  [torch.zeros(self.hps.batch_size, extended_vsize).cuda().scatter_add_(1, self.paragraph_inputs_extend_vocab, copy_dist) for copy_dist in attn_dists]
         

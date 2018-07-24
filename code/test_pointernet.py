@@ -1,6 +1,6 @@
 from PointerNet import PointerNet
 from data import Vocab
-from batcher import Batcher
+from batcher import batcher#NewBatcher
 import torch
 import argparse
 import numpy as np
@@ -18,7 +18,7 @@ parser.add_argument('--word_count_path', type=str, default='../data/squad-v1/dev
                     help='the data path to load raw data')
 parser.add_argument('--glove_path', type=str, default='../data/squad-v1/dev_raw.json',
                     help='the data path to load raw data')
-parser.add_argument('--batch_size', type=int, default=1024,
+parser.add_argument('--batch_size', type=int, default=100,
                     help='the num of examples in one batch')
 parser.add_argument('--max_enc_steps', type=int, default=65,
                     help='the num of examples in one batch')
@@ -63,8 +63,7 @@ def main():
     net = PointerNet(hps, np.stack(vocab.emb_mat, axis=0))
     net = net.cuda()
 
-
-    batcher = Batcher(hps.data_path, vocab, hps, hps.single_pass)
+    data_batcher = batcher(hps.data_path, vocab, hps, hps.single_pass)
     model_parameters = filter(lambda p: p.requires_grad, net.parameters())
     optimizer = optim.Adam(model_parameters)
 
@@ -72,7 +71,7 @@ def main():
     global_step = 0
     while True:
         start = time.time()
-        batch = batcher.next_batch()
+        batch = next(data_batcher)
         #batch = pickle.load(open('one_batch.pkl', 'rb'))
         paragraph_tensor = torch.tensor(batch.enc_batch, dtype=torch.int64, requires_grad=False).cuda()
         question_tensor = torch.tensor(batch.dec_batch, dtype=torch.int64, requires_grad=False).cuda()
@@ -112,7 +111,7 @@ def main():
         if global_step % hps.print_every == 0:
             print('Step {:>10}: ave loss: {:>10.4f}, speed: {:.4f}/case'.format(global_step, sum(loss_track)/len(loss_track), (time.time()-start)/hps.batch_size))
             loss_track = []
-        break
+        #break
 
 if __name__ == '__main__':
     main()

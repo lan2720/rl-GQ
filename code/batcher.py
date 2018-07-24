@@ -386,6 +386,29 @@ class Batcher(object):
                     new_t.start()
 
 
+def batcher(data_path, vocab, hps, single_pass):
+    example_list = []
+    input_gen = text_generator(data.example_generator(data_path, single_pass))
+    
+    while True:
+        try:
+            (paragraph, question, answer, answer_position) = next(input_gen) # read the next example from file. article and abstract are both strings.
+        except StopIteration: # if there are no more examples:
+            print("The example generator for this example queue filling thread has exhausted data.")
+            if self._single_pass:
+                print("single_pass mode is on, so we've finished reading dataset. This thread is stopping.")
+                break
+            else:
+                raise Exception("single_pass mode is off but the example generator is out of data; error.")
+
+        example = Example(paragraph, question, answer, answer_position, vocab, hps) # Process into an Example.
+        example_list.append(example)
+        if len(example_list) == hps.batch_size:
+            example_list = sorted(example_list, key=lambda inp: inp.enc_len, reverse=True)
+            yield Batch(example_list, hps, vocab)
+            example_list = []
+
+
 def text_generator(example_generator):
     """Generates article and abstract text from tf.Example.
 
