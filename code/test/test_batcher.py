@@ -1,4 +1,5 @@
 from batcher import Batcher, Example, Batch, text_generator, id2sentence
+#from batcher import newbatcher
 from data import Vocab
 import data
 import argparse
@@ -82,14 +83,16 @@ def test_batch():
 
 def test_batcher():
     batcher = Batcher(hps.data_path, vocab, hps, hps.single_pass)
+    #batcher = newbatcher(vocab, hps, hps.data_path, hps.single_pass)
     #time.sleep(15)
     while True:
         start = time.time()
+        #batch = next(batcher)#.next_batch()
         batch = batcher.next_batch()
         print('elapse:', time.time()-start)
-        pickle.dump(batch, open('one_batch.pkl', 'wb'))
-        print('finish')
-        break
+        #pickle.dump(batch, open('one_batch.pkl', 'wb'))
+        #print('finish')
+        #break
         #print('batch answer pos:', batch.ans_indices)
         #print('enc batch:', batch.enc_batch)
         #print('enc batch words:', id2sentence(batch.enc_batch, vocab, batch.para_oovs_batch))
@@ -106,7 +109,18 @@ def test_batcher():
         #print('origin para:', batch.original_paragraphs)
         #print('origin question:', batch.original_questions)
         #print('origin answer:', batch.original_answers)
-    
+
+def test_stop():
+    from batcher import text_generator
+    input_gen = text_generator(data.example_generator(hps.data_path, hps.single_pass))
+    i = 0
+    while True:
+        sample = next(input_gen)
+        i += 1
+        print(i, sample[0])
+
+
 if __name__ == '__main__':
+    #test_stop()
     test_batcher()
     #test_example()

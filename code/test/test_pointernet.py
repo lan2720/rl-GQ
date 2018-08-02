@@ -60,7 +60,7 @@ def mask_and_avg(values, padding_mask):
 def main():
     vocab = Vocab(hps.word_count_path, hps.glove_path, hps.embedding_dim)
 
-    net = PointerNet(hps, np.stack(vocab.emb_mat, axis=0))
+    net = PointerNet(hps, vocab.emb_mat)
     net = net.cuda()
 
     data_batcher = batcher(hps.data_path, vocab, hps, hps.single_pass)

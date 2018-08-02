@@ -23,6 +23,8 @@ import csv
 import mmap
 from tqdm import tqdm
 import ujson as json
+import os
+import pickle
 
 random.seed(1024)
 
@@ -34,6 +36,11 @@ PAD_TOKEN = '[PAD]' # This has a vocab id, which is used to pad the encoder inpu
 UNKNOWN_TOKEN = '[UNK]' # This has a vocab id, which is used to represent out-of-vocabulary words
 START_DECODING = '[START]' # This has a vocab id, which is used at the start of every decoder input sequence
 STOP_DECODING = '[STOP]' # This has a vocab id, which is used at the end of untruncated target sequences
+
+PAD_ID = 0
+UNK_ID = 1
+GO_ID = 2
+EOS_ID = 3
 
 # Note: none of <s>, </s>, [PAD], [UNK], [START], [STOP] should appear in the vocab file.
 
@@ -50,7 +57,7 @@ def get_num_lines(file_path):
 class Vocab(object):
     """Vocabulary class for mapping between words and ids (integers)"""
 
-    def __init__(self, wordcount_file, emb_file, vec_size):
+    def __init__(self, wordcount_file, emb_file, vec_size, embedding_dict_file=None):
         """Creates a vocab of up to max_size words, reading from the vocab_file. If max_size is 0, reads the entire vocab file.
 
         Args:
@@ -65,20 +72,25 @@ class Vocab(object):
             self._word_to_id[w] = self._count
             self._id_to_word[self._count] = w
             self._count += 1
-
-        word_counter = json.load(open(wordcount_file))
         
-        embedding_dict = {}
-        # Read the vocab file and add words up to max_size
-        with open(emb_file, 'r') as f:
-            for line in tqdm(f, total=get_num_lines(emb_file)):
-                array = line.split()
-                word = "".join(array[0:-vec_size])
-                vector = list(map(float, array[-vec_size:]))
-                if word in word_counter:
-                    embedding_dict[word] = vector
-        print("{} / {} tokens have corresponding embedding vector".format(
-              len(embedding_dict), len(word_counter)))
+        if not embedding_dict_file:
+            word_counter = json.load(open(wordcount_file))
+            print('Begin to read pretrain embedding file')
+            embedding_dict = {}
+            # Read the vocab file and add words up to max_size
+            with open(emb_file, 'r') as f:
+                for line in tqdm(f, total=get_num_lines(emb_file)):
+                    array = line.split()
+                    word = "".join(array[0:-vec_size])
+                    vector = list(map(float, array[-vec_size:]))
+                    if word in word_counter:
+                        embedding_dict[word] = vector
+            print("{} / {} tokens have corresponding embedding vector".format(
+                  len(embedding_dict), len(word_counter)))
+            embedding_dict_file = os.path.join(os.path.dirname(wordcount_file), 'emb_dict.pkl')
+            pickle.dump(embedding_dict, open(embedding_dict_file, 'wb'))
+        else:
+            embedding_dict = pickle.load(open(embedding_dict_file, 'rb'))
         
         for i, w in enumerate(embedding_dict.keys(), self._count):
             self._word_to_id[w] = i
@@ -111,7 +123,7 @@ class Vocab(object):
         return self._count
 
 
-def example_generator(data_path, single_pass):
+def example_generator(examples, single_pass):
     """Generates tf.Examples from data files.
 
         Binary data format: <length><blob>. <length> represents the byte size
@@ -127,16 +139,34 @@ def example_generator(data_path, single_pass):
     Yields:
         Deserialized tf.Example.
     """
-    examples = json.load(open(data_path))
-    while True:
-        if not single_pass:
-            random.shuffle(examples)
-        for ex in examples:
-            yield ex
-            #yield ex['correct_sentence'], ex['question'], (ex['ans_start_in_sent'], ex['ans_end_in_sent'])
-        if single_pass:
-            print("example_generator completed reading all datafiles. No more data.")
-            break
+    if not single_pass:
+        random.shuffle(examples)
+    for ex in examples:
+        yield ex
+
+
+#def forever_example_generator(data_path, single_pass):
+#    """Generates tf.Examples from data files.
+#
+#        Binary data format: <length><blob>. <length> represents the byte size
+#        of <blob>. <blob> is serialized tf.Example proto. The tf.Example contains
+#        the tokenized article text and summary.
+#
+#    Args:
+#        data_path:
+#            Path to tf.Example data files. Can include wildcards, e.g. if you have several training data chunk files train_001.bin, train_002.bin, etc, then pass data_path=train_* to access them all.
+#        single_pass:
+#            Boolean. If True, go through the dataset exactly once, generating examples in the order they appear, then return. Otherwise, generate random examples indefinitely.
+#
+#    Yields:
+#        Deserialized tf.Example.
+#    """
+#    examples = json.load(open(data_path))
+#    while True:
+#        if not single_pass:
+#            random.shuffle(examples)
+#        for ex in examples:
+#            yield ex
 
 
 def article2ids(article_words, vocab):

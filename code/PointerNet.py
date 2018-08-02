@@ -1,8 +1,9 @@
+# coding:utf-8
 import torch
 import torch.nn as nn
-from torch.nn import Parameter
 import torch.nn.functional as F
 import pickle
+import numpy as np
 import sys
 
 class Encoder(nn.Module):
@@ -36,16 +37,15 @@ class Encoder(nn.Module):
                             dropout=dropout,
                             bidirectional=bidir)
 
-        # Used for propagating .cuda() command
-        self.h0 = Parameter(torch.zeros(1), requires_grad=False)
-        self.c0 = Parameter(torch.zeros(1), requires_grad=False)
+        self.h0 = nn.Parameter(torch.zeros(1), requires_grad=False)
+        self.c0 = nn.Parameter(torch.zeros(1), requires_grad=False)
 
     def forward(self, embedded_inputs, inputs_length, hidden):
         """
         Encoder - Forward-pass
 
         :param Tensor embedded_inputs: Embedded inputs of Pointer-Net
-        :param Tensor hidden: Initiated hidden units for the LSTMs (h, c)
+        :param Tensor init_hidden: Initiated hidden units for the LSTMs (h, c)
         :return: LSTMs outputs and hidden units (h, c)
         """
         batch_size, seq_len, _ = embedded_inputs.size()
@@ -61,7 +61,7 @@ class Encoder(nn.Module):
         # hidden shape = [n_layer * n_dir, batch_size, hid_size]
         return outputs, hidden
 
-    def init_hidden(self, embedded_inputs):
+    def initialize_hidden(self, embedded_inputs):
         """
         Initiate hidden units
 
@@ -88,9 +88,6 @@ class Encoder(nn.Module):
                     .view(h.size(0) // 2, h.size(1), h.size(2) * 2)
         else:
             return h
-    
-
-
 
 
 class Attention(nn.Module):
@@ -114,29 +111,28 @@ class Attention(nn.Module):
             assert src_input_dim == tgt_input_dim, 'Please make sure src_input_dim = tgt_input_dim when Attn=dot'
             self.score = self._dot
         elif method == 'general':
-            self.Wa = Parameter(torch.FloatTensor(tgt_input_dim, src_input_dim), requires_grad=True)
+            self.Wa = nn.Parameter(torch.FloatTensor(tgt_input_dim, src_input_dim))
             self.score = self._general
         elif method == 'concat':
-            #self.Wa = Parameter(torch.FloatTensor(tgt_input_dim+src_input_dim, attn_dim), requires_grad=True)
-            self.Wh = Parameter(torch.FloatTensor(tgt_input_dim, attn_dim), requires_grad=True)
-            self.Ws = Parameter(torch.FloatTensor(src_input_dim, attn_dim), requires_grad=True)
-            self.b_attn = Parameter(torch.FloatTensor(attn_dim,), requires_grad=True)
-            self.va = Parameter(torch.FloatTensor(attn_dim), requires_grad=True)
+            self.Wh = nn.Parameter(torch.FloatTensor(tgt_input_dim, attn_dim))
+            self.Ws = nn.Parameter(torch.FloatTensor(src_input_dim, attn_dim))
+            self.b_attn = nn.Parameter(torch.FloatTensor(attn_dim,))
+            self.va = nn.Parameter(torch.FloatTensor(attn_dim))
             self.score = self._concat
 
         self.softmax = nn.Softmax(dim=1)
 
         # Initialize weight
         if self.Wa is not None:
-            nn.init.uniform_(self.Wa, -1, 1)
+            nn.init.uniform_(self.Wa, -0.1, 0.1)
         if self.Wh is not None:
-            nn.init.uniform_(self.Wh, -1, 1)
+            nn.init.uniform_(self.Wh, -0.1, 0.1)
         if self.Ws is not None:
-            nn.init.uniform_(self.Ws, -1, 1)
+            nn.init.uniform_(self.Ws, -0.1, 0.1)
         if self.b_attn is not None:
-            nn.init.uniform_(self.b_attn, -1, 1)
+            nn.init.uniform_(self.b_attn, -0.1, 0.1)
         if self.va is not None:
-            nn.init.uniform_(self.va, -1, 1)
+            nn.init.uniform_(self.va, -0.1, 0.1)
     
     def _dot(self, ht, context):
         # [batch_size, enc_seq_len]
@@ -197,8 +193,49 @@ class Decoder(nn.Module):
         self.hidden_to_hidden = nn.Linear(hidden_dim, 4 * hidden_dim)
         self.hidden_out = nn.Linear(hidden_dim * 2, hidden_dim)
         self.attn = Attention(attn_method, hidden_dim, hidden_dim, attn_dim)
+        self.calc_attentive_x = nn.Linear(hidden_dim + embedding_dim, hidden_dim)
         # To calculate pgen, we use [context_vector, state.c, state.h, x]
-        self.calc_pgen = nn.Linear(3 * hidden_dim + embedding_dim, 1)
+        self.calc_pgen = nn.Linear(4 * hidden_dim, 1)
+
+
+    def lstm_step(self, x, state, context):
+        """
+        Recurrence step function
+
+        :param Tensor x: Input at time t, x = [batch_size, embed_dim]
+        :param tuple(Tensor, Tensor) hidden: Hidden states at time t-1, (h0, c0) = [batch_size, hid_dim]
+        :return: Hidden states at time t (h, c), Attention probabilities (Alpha)
+        """
+
+        # Regular LSTM
+        h, c = state
+        gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
+        input, forget, cell, out = gates.chunk(4, 1)
+
+        input = F.sigmoid(input)
+        forget = F.sigmoid(forget)
+        cell = F.tanh(cell)
+        out = F.sigmoid(out)
+
+        c_t = (forget * c) + (input * cell)
+        h_t = out * F.tanh(c_t)
+        # h_t = [batch_size, hid_dim]
+
+        # Attention section
+        attn_ctx, attn_dist = self.attn(h_t, context)
+        # attn_context = [batch_size, enc_hid_dim]
+
+        return h_t, c_t, attn_ctx, attn_dist
+
+    def output_step(self, x, h_t, c_t, attn_ctx):
+        # refer to https://github.com/abisee/pointer-generator/blob/0cdcaeeaf8f42d4d64ec2ed09eb2f0158cd0db8f/attention_decoder.py#L166
+        # https://arxiv.org/pdf/1704.04368.pdf Eqn.(8) 
+        out = self.hidden_out(torch.cat((attn_ctx, h_t), 1))
+        calc_input = torch.cat([attn_ctx, h_t, c_t, x], dim=1)
+        p_gen = self.calc_pgen(calc_input)
+        p_gen = F.sigmoid(p_gen)
+        return out, p_gen
+    
 
     def forward(self, embedded_inputs, state, context):
         """
@@ -218,53 +255,17 @@ class Decoder(nn.Module):
         outputs = [] # a list of comb_h_t
         attn_dists = []
         p_gens = []
-
-        def step(x, state):
-            """
-            Recurrence step function
-
-            :param Tensor x: Input at time t, x = [batch_size, embed_dim]
-            :param tuple(Tensor, Tensor) hidden: Hidden states at time t-1, (h0, c0) = [batch_size, hid_dim]
-            :return: Hidden states at time t (h, c), Attention probabilities (Alpha)
-            """
-
-            # Regular LSTM
-            h, c = state
-
-            gates = self.input_to_hidden(x) + self.hidden_to_hidden(h)
-            input, forget, cell, out = gates.chunk(4, 1)
-
-            input = F.sigmoid(input)
-            forget = F.sigmoid(forget)
-            cell = F.tanh(cell)
-            out = F.sigmoid(out)
-
-            c_t = (forget * c) + (input * cell)
-            h_t = out * F.tanh(c_t)
-            # h_t = [batch_size, hid_dim]
-
-            # Attention section
-            attn_ctx, attn_dist = self.attn(h_t, context)
-            # attn_context = [batch_size, enc_hid_dim]
-
-            return h_t, c_t, attn_ctx, attn_dist
         
-        decoder_inputs = [each.squeeze() for each in torch.split(embedded_inputs, 1, dim=1)]
+        decoder_inputs = [each.squeeze(1) for each in torch.split(embedded_inputs, 1, dim=1)]
         # Recurrence loop
         for i in range(input_length):
-            h_t, c_t, attn_ctx, attn_dist = step(decoder_inputs[i], state)
-            attn_dists.append(attn_dist)
+            h_t, c_t, attn_ctx, attn_dist = self.lstm_step(decoder_inputs[i], state, context)
+            x = self.calc_attentive_x(torch.cat([attn_ctx, decoder_inputs[i]], dim=1))
+            output, p_gen = self.output_step(x, h_t, c_t, attn_ctx)
             state = (h_t, c_t)
-            
             #comb_h_t = F.tanh(self.hidden_out(torch.cat((attn_ctx, h_t), 1)))
-            comb_h_t = self.hidden_out(torch.cat((attn_ctx, h_t), 1))
-            outputs.append(comb_h_t)
-            
-            # refer to https://github.com/abisee/pointer-generator/blob/0cdcaeeaf8f42d4d64ec2ed09eb2f0158cd0db8f/attention_decoder.py#L166
-            # https://arxiv.org/pdf/1704.04368.pdf Eqn.(8) 
-            calc_input = torch.cat([attn_ctx, h_t, c_t, decoder_inputs[i]], dim=1)
-            p_gen = self.calc_pgen(calc_input)
-            p_gen = F.sigmoid(p_gen)
+            attn_dists.append(attn_dist)
+            outputs.append(output)
             p_gens.append(p_gen)
 
         return outputs, state, attn_dists, p_gens
@@ -275,7 +276,7 @@ class PointerNet(nn.Module):
     Pointer-Net
     """
 
-    def __init__(self, hps, word_emb_mat):
+    def __init__(self, hps, word_emb):
         """
         Initiate Pointer-Net
 
@@ -288,8 +289,8 @@ class PointerNet(nn.Module):
 
         super(PointerNet, self).__init__()
         self.hps = hps
-        self.word_emb_mat = word_emb_mat
-        self.vocab_size = word_emb_mat.shape[0]
+        self.word_emb_mat = np.stack(word_emb, axis=0)
+        self.vocab_size = len(word_emb)
         self.embedding_dim = hps.embedding_dim
         self.bidir = hps.bidir
         self.encoder_hidden_dim = hps.hidden_dim * 2 if self.bidir else hps.hidden_dim
@@ -309,18 +310,41 @@ class PointerNet(nn.Module):
                                       self.n_layers, 
                                       hps.dropout,
                                       self.bidir)
-        self.L = nn.Parameter(torch.FloatTensor(self.encoder_hidden_dim, self.encoder_hidden_dim), requires_grad=True) 
-        self.W0 = nn.Parameter(torch.FloatTensor(self.encoder_hidden_dim, self.decoder_hidden_dim), requires_grad=True) 
-        self.b0 = nn.Parameter(torch.FloatTensor(self.decoder_hidden_dim), requires_grad=True) 
+        self.L = nn.Parameter(torch.FloatTensor(self.encoder_hidden_dim, self.encoder_hidden_dim)) 
+        self.W0 = nn.Parameter(torch.FloatTensor(self.encoder_hidden_dim, self.decoder_hidden_dim)) 
+        self.b0 = nn.Parameter(torch.FloatTensor(self.decoder_hidden_dim)) 
 
-        self.decoder = Decoder(self.embedding_dim, self.decoder_hidden_dim, attn_method=hps.attn_type, attn_dim=self.decoder_hidden_dim)
+        nn.init.uniform_(self.L, -0.1, 0.1)
+        nn.init.uniform_(self.W0, -0.1, 0.1)
+        nn.init.uniform_(self.b0, -0.1, 0.1)
+
+        self.decoder = Decoder(self.embedding_dim,
+                               self.decoder_hidden_dim, 
+                               attn_method=hps.attn_type,
+                               attn_dim=self.decoder_hidden_dim)
         
         # output layer
         self.output = nn.Linear(self.decoder_hidden_dim, self.vocab_size)
         self.softmax = nn.Softmax(dim=1)
+
+    def encoder_forward(self, paragraph_inputs, answer_positions):
+        para_length, _ = length_and_mask(paragraph_inputs)
+
+        embedded_para_inputs = self.embedding(paragraph_inputs)
+
+        encoder_para_hidden0 = self.paragraph_encoder.initialize_hidden(embedded_para_inputs)
+
+        # embedded_para_inputs & para_length has sorted
+        para_encoder_outputs, para_encoder_hidden = self.paragraph_encoder(embedded_para_inputs, para_length, encoder_para_hidden0)
+        ht_ans = self.answer_encoding(embedded_para_inputs, para_encoder_outputs, answer_positions) 
+        decoder_h0 = self.combine_hidden(ht_ans, para_encoder_outputs)
+        decoder_c0 = torch.zeros_like(decoder_h0).cuda()
+        init_state = (decoder_h0, decoder_c0)
+        return para_encoder_outputs, init_state
         
 
-    def forward(self, paragraph_inputs, question_inputs, answer_positions, paragraph_inputs_extend_vocab=None, max_para_oovs=None):
+    def forward(self, paragraph_inputs, question_inputs, answer_positions,
+                paragraph_inputs_extend_vocab=None, max_para_oovs=None):
         """
         PointerNet - Forward-pass
 
@@ -332,18 +356,9 @@ class PointerNet(nn.Module):
             self.paragraph_inputs_extend_vocab = paragraph_inputs_extend_vocab
             self.max_para_oovs = max_para_oovs
 
-        para_length, _ = length_and_mask(paragraph_inputs)
-
-        embedded_para_inputs = self.embedding(paragraph_inputs)
+        para_encoder_outputs, init_state = self.encoder_forward(paragraph_inputs, answer_positions)
         embedded_ques_inputs = self.embedding(question_inputs)
-
-        encoder_para_hidden0 = self.paragraph_encoder.init_hidden(embedded_para_inputs)
-
-        para_encoder_outputs, para_encoder_hidden = self.paragraph_encoder(embedded_para_inputs, para_length, encoder_para_hidden0)
-        ht_ans = self.answer_encoding(embedded_para_inputs, para_encoder_outputs, answer_positions) 
-        decoder_h0 = self.combine_hidden(ht_ans, para_encoder_outputs)
-        decoder_c0 = torch.zeros_like(decoder_h0).cuda()
-        init_state = (decoder_h0, decoder_c0)
+        
 
         outputs, state, attn_dists, self.p_gens = self.decoder(embedded_ques_inputs,
                                                                init_state,
@@ -362,6 +377,7 @@ class PointerNet(nn.Module):
 
         return vocab_scores, vocab_dists, attn_dists, final_dists
 
+
     def answer_encoding(self, embedded_para_inputs, para_outputs, answer_positions):
         answer_length = answer_positions[:,1] - answer_positions[:,0]
         answer_hidden = torch.zeros_like(para_outputs).cuda()
@@ -374,9 +390,12 @@ class PointerNet(nn.Module):
         # 根据ans length排序, 排序后才能进行lstm
         sorted_ans_len, sorted_ans_indices = torch.sort(answer_length, descending=True)
         sorted_comb_h = comb_h[sorted_ans_indices]
-        _, (ht_ans, _) = self.answer_encoder(sorted_comb_h, sorted_ans_len, self.answer_encoder.init_hidden(sorted_comb_h))
-        ht_ans = self.answer_encoder.fix_hidden(ht_ans).squeeze(0)
+        _, (sorted_ht_ans, _) = self.answer_encoder(sorted_comb_h, sorted_ans_len, self.answer_encoder.initialize_hidden(sorted_comb_h))
+        sorted_ht_ans = self.answer_encoder.fix_hidden(sorted_ht_ans).squeeze(0)
+        # ans encoding后必须还原成原来的顺序
+        ht_ans = restore_order(sorted_ht_ans, sorted_ans_indices) 
         return ht_ans
+    
 
     def combine_hidden(self, answer_hidden, paragraph_hidden):
         """
@@ -387,28 +406,19 @@ class PointerNet(nn.Module):
         """
         r = torch.mm(answer_hidden, self.L) + torch.mean(paragraph_hidden, 1)
         return F.tanh(torch.mm(r, self.W0) + self.b0)
-    
+   
+
     def calc_final_dist(self, vocab_dists, attn_dists):
         vocab_dists = [p_gen * dist for (p_gen,dist) in zip(self.p_gens, vocab_dists)]
         attn_dists = [(1-p_gen) * dist for (p_gen,dist) in zip(self.p_gens, attn_dists)]
+        batch_size = vocab_dists[0].size(0)
         if self.max_para_oovs > 0:
-            extra_zeros = torch.zeros((self.hps.batch_size, self.max_para_oovs)).cuda()
+            extra_zeros = torch.zeros((batch_size, self.max_para_oovs)).cuda()
             vocab_dists_extended = [torch.cat([dist, extra_zeros], dim=1) for dist in vocab_dists]
         else:
             vocab_dists_extended = vocab_dists
-            #vocab_dists_extended = []
-            #for dist in vocab_dists:
-            #    try:
-            #        vocab_dists_extended.append(torch.cat([dist, extra_zeros], dim=1))
-            #except:
-            #    print('error!!!!!')
-            #    print('vocab dist:', dist.size())
-            #    print('extra zeros:', extra_zeros.size())
-            #    pickle.dump(dist, open('dist.pkl', 'wb'))
-            #    pickle.dump(extra_zeros, open('extra_zero.pkl', 'wb'))
-            #    sys.exit()
         extended_vsize = self.vocab_size + self.max_para_oovs
-        attn_dists_projected =  [torch.zeros(self.hps.batch_size, extended_vsize).cuda().scatter_add_(1, self.paragraph_inputs_extend_vocab, copy_dist) for copy_dist in attn_dists]
+        attn_dists_projected =  [torch.zeros(batch_size, extended_vsize).cuda().scatter_add_(1, self.paragraph_inputs_extend_vocab, copy_dist) for copy_dist in attn_dists]
         
         final_dists = [vocab_dist + copy_dist for (vocab_dist,copy_dist) in zip(vocab_dists_extended, attn_dists_projected)]
         return final_dists
@@ -418,3 +428,10 @@ def length_and_mask(input_tensor):
     mask = torch.eq(input_tensor, 0)
     length = input_tensor.size(1) - torch.sum(mask, dim=1)
     return length, mask
+
+
+def restore_order(sorted_data, sorted_indices):
+    _, raw_indices = torch.sort(sorted_indices, dim=0)
+    return sorted_data[raw_indices]
+
+
