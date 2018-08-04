@@ -112,25 +112,25 @@ def run_eval(batcher, model):
             paragraph_batch_extend_vocab = torch.tensor(batch.enc_batch_extend_vocab, dtype=torch.int64, requires_grad=False).cuda()
             max_para_oovs = batch.max_para_oovs
 
-            vocab_scores, vocab_dists, attn_dists, final_dists = model(paragraph_tensor, question_tensor, answer_position_tensor,
-                                                                     paragraph_batch_extend_vocab, max_para_oovs)
-            
-            dec_padding_mask = torch.ne(target_tensor, 0).float().cuda()
-            if hps.pointer_gen:
-                loss_per_step = []
-                for dec_step, dist in enumerate(final_dists):
-                    # dist = [batch_size, extended_vsize]
-                    targets = target_tensor[:,dec_step]
-                    gold_probs = torch.gather(dist, 1, targets.unsqueeze(1)).squeeze()
-                    losses = -torch.log(gold_probs)
-                    loss_per_step.append(losses) # a list of [batch_size,]
-                loss = mask_and_avg(loss_per_step, dec_padding_mask)
-            else:
-                # a list of dec_max_len (vocab_scores)
-                loss_batch_by_step = F.cross_entropy(torch.cat(vocab_scores, dim=1).reshape(-1, vocab.size()), target_tensor.reshape(-1), size_average=False, reduce=False)
-                # loss [batch_size*dec_max_len,]
-                loss = torch.sum(loss_batch_by_step * dec_padding_mask.reshape(-1))/torch.sum(dec_padding_mask)
-            loss_track.append(loss.item())
+        vocab_scores, vocab_dists, attn_dists, final_dists = model(paragraph_tensor, question_tensor, answer_position_tensor,
+                                                                 paragraph_batch_extend_vocab, max_para_oovs)
+        
+        dec_padding_mask = torch.ne(target_tensor, 0).float().cuda()
+        if hps.pointer_gen:
+            loss_per_step = []
+            for dec_step, dist in enumerate(final_dists):
+                # dist = [batch_size, extended_vsize]
+                targets = target_tensor[:,dec_step]
+                gold_probs = torch.gather(dist, 1, targets.unsqueeze(1)).squeeze()
+                losses = -torch.log(gold_probs)
+                loss_per_step.append(losses) # a list of [batch_size,]
+            loss = mask_and_avg(loss_per_step, dec_padding_mask)
+        else:
+            # a list of dec_max_len (vocab_scores)
+            loss_batch_by_step = F.cross_entropy(torch.stack(vocab_scores, dim=1).reshape(-1, vocab_scores[0].size(1)), target_tensor.reshape(-1), size_average=False, reduce=False)
+            # loss [batch_size*dec_max_len,]
+            loss = torch.sum(loss_batch_by_step * dec_padding_mask.reshape(-1))/torch.sum(dec_padding_mask)
+        loss_track.append(loss.item())
 
     if len(loss_track) > 0:
         return sum(loss_track)/len(loss_track)
@@ -264,7 +264,7 @@ def main():
                     # this rl_loss = [batch_size, ]
                 else:
                     # a list of dec_max_len (vocab_scores)
-                    loss_batch_by_step = F.cross_entropy(torch.cat(vocab_scores, dim=1).reshape(-1, vocab.size()), sample_seq_tensor.reshape(-1), size_average=False, reduce=False)
+                    loss_batch_by_step = F.cross_entropy(torch.stack(vocab_scores, dim=1).reshape(-1, vocab.size()), sample_seq_tensor.reshape(-1), size_average=False, reduce=False)
                     # loss [batch_size*dec_max_len,]
                     mask_loss_batch_by_step = loss_batch_by_step * dec_padding_mask.reshape(-1)
                     batch_size = vocab_scores[0].size(0)
@@ -290,7 +290,7 @@ def main():
                     loss = mask_and_avg(loss_per_step, dec_padding_mask)
                 else:
                     # a list of dec_max_len (vocab_scores)
-                    loss_batch_by_step = F.cross_entropy(torch.cat(vocab_scores, dim=1).reshape(-1, vocab.size()), target_tensor.reshape(-1), size_average=False, reduce=False)
+                    loss_batch_by_step = F.cross_entropy(torch.stack(vocab_scores, dim=1).reshape(-1, vocab.size()), target_tensor.reshape(-1), size_average=False, reduce=False)
                     # loss [batch_size*dec_max_len,]
                     loss = torch.sum(loss_batch_by_step * dec_padding_mask.reshape(-1))/torch.sum(dec_padding_mask)
             
