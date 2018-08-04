@@ -20,6 +20,7 @@ import glob
 import random
 import struct
 import csv
+import copy
 import mmap
 from tqdm import tqdm
 import ujson as json
@@ -57,7 +58,7 @@ def get_num_lines(file_path):
 class Vocab(object):
     """Vocabulary class for mapping between words and ids (integers)"""
 
-    def __init__(self, wordcount_file, emb_file, vec_size, embedding_dict_file=None):
+    def __init__(self, wordcount_file, emb_file, vec_size, max_size=None, embedding_dict_file=None):
         """Creates a vocab of up to max_size words, reading from the vocab_file. If max_size is 0, reads the entire vocab file.
 
         Args:
@@ -75,7 +76,7 @@ class Vocab(object):
         
         if not embedding_dict_file:
             word_counter = json.load(open(wordcount_file))
-            print('Begin to read pretrain embedding file')
+            print('No fixed embedding dict file, begin to read pretrain embedding file')
             embedding_dict = {}
             # Read the vocab file and add words up to max_size
             with open(emb_file, 'r') as f:
@@ -87,7 +88,19 @@ class Vocab(object):
                         embedding_dict[word] = vector
             print("{} / {} tokens have corresponding embedding vector".format(
                   len(embedding_dict), len(word_counter)))
-            embedding_dict_file = os.path.join(os.path.dirname(wordcount_file), 'emb_dict.pkl')
+            if max_size:
+                print("Since max_size=%d" % max_size, "we have to truncate extra word")
+                sorted_words = sorted(word_counter.items(), key=lambda i:-i[1])
+                topk_words = [[*x] for x in zip(*sorted_words)][0]
+                tmp = {}
+                for w in topk_words:
+                    if w in embedding_dict:
+                        tmp[w] = embedding_dict[w]
+                        if len(tmp) == max_size:
+                            break
+                embedding_dict = tmp
+                assert len(embedding_dict) == max_size
+            embedding_dict_file = os.path.join(os.path.dirname(wordcount_file), 'emb_dict_%d.pkl' % max_size)
             pickle.dump(embedding_dict, open(embedding_dict_file, 'wb'))
         else:
             embedding_dict = pickle.load(open(embedding_dict_file, 'rb'))

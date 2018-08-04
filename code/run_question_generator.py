@@ -15,6 +15,7 @@ import copy
 from nltk.translate.bleu_score import corpus_bleu
 from multi_bleu import bleu
 import utils
+import torch.nn.functional as F
 # python run_question_generator.py --data_path=../data/squad-v1/ --word_count_path=../data/squad-v1/word_counter.json --glove_path=/home/jiananwang/data/glove/glove.840B.300d.txt --pointer_gen --bidir
 # python run_question_generator.py --data_path=../data/squad-v1/ --word_count_path=../data/squad-v1/word_counter.json --glove_path=/home/jiananwang/data/glove/glove.840B.300d.txt --pointer_gen --bidir --self_critic
 # python run_question_generator.py --exp_dir=../exp/pretrain --data_path=../data/squad-v1/ --word_count_path=../data/squad-v1/word_counter.json --glove_path=/home/jiananwang/data/glove/glove.840B.300d.txt --maxium_likelihood --pointer_gen --bidir --save
@@ -36,6 +37,8 @@ parser.add_argument('--num_epoch', type=int, default=50,
 parser.add_argument('--max_enc_steps', type=int, default=65,
                     help='the num of examples in one batch')
 parser.add_argument('--max_dec_steps', type=int, default=65,
+                    help='the num of examples in one batch')
+parser.add_argument('--max_vocab_size', type=int, default=50000,
                     help='the num of examples in one batch')
 parser.add_argument('--single_pass', default=False, action='store_true',
                     help='whether pass the only one example each time') # only True when decoding
@@ -61,7 +64,7 @@ parser.add_argument('--dropout', type=float, default=0.,
                     help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--norm_limit', type=float, default=2.,
                     help='whether to use pointer mechanism') # only True when decoding
-parser.add_argument('--early_stopping_from', type=int, default=10,
+parser.add_argument('--early_stopping_from', type=int, default=9,
                     help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--save', default=False, action='store_true',
                     help='whether to use pointer mechanism') # only True when decoding
@@ -161,8 +164,8 @@ def get_batch_bleu(refs, hyps):
 
 
 def main():
-    embedding_dict_file = os.path.join(os.path.dirname(hps.word_count_path), 'emb_dict.pkl')
-    vocab = Vocab(hps.word_count_path, hps.glove_path, hps.embedding_dim, embedding_dict_file)
+    embedding_dict_file = os.path.join(os.path.dirname(hps.word_count_path), 'emb_dict_50000.pkl')
+    vocab = Vocab(hps.word_count_path, hps.glove_path, hps.embedding_dim, hps.max_vocab_size, embedding_dict_file)
     train_file = os.path.join(hps.data_path, 'train_raw.json')
     dev_file = os.path.join(hps.data_path, 'dev_raw.json')#'dev_raw.json')
     
@@ -175,8 +178,6 @@ def main():
     
     if hps.save:
         utils.save_hps(hps.exp_dir, hps)
-
-
 
     net = PointerNet(hps, vocab.emb_mat)
     net = net.cuda()
@@ -302,8 +303,6 @@ def main():
             #print('time one step:', time.time()-start)
             if (global_step == 1) or (global_step % hps.print_every == 0):
                 print('Step {:>5}: ave loss: {:>10.4f}, speed: {:.1f} case/s'.format(global_step, sum(epoch_loss_track)/len(epoch_loss_track), hps.batch_size/(time.time()-start)))
-                if hps.save:
-                    utils.save_model(hps.exp_dir, net, 'hehe')
             
 
 if __name__ == '__main__':
