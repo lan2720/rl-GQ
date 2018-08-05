@@ -177,7 +177,7 @@ class Decoder(nn.Module):
     Decoder model for Pointer-Net
     """
 
-    def __init__(self, embedding_dim, hidden_dim, attn_method, attn_dim):
+    def __init__(self, embedding_dim, hidden_dim, attn_method, attn_dim, dropout):
         """
         Initiate Decoder
 
@@ -195,6 +195,7 @@ class Decoder(nn.Module):
         self.attn = Attention(attn_method, hidden_dim, hidden_dim, attn_dim)
         self.calc_attentive_x = nn.Linear(hidden_dim + embedding_dim, hidden_dim)
         # To calculate pgen, we use [context_vector, state.c, state.h, x]
+        self.dropout = nn.Dropout(p=dropout)
         self.calc_pgen = nn.Linear(4 * hidden_dim, 1)
 
 
@@ -260,7 +261,9 @@ class Decoder(nn.Module):
         # Recurrence loop
         for i in range(input_length):
             h_t, c_t, attn_ctx, attn_dist = self.lstm_step(decoder_inputs[i], state, context)
+            attn_ctx = self.dropout(attn_ctx)
             x = self.calc_attentive_x(torch.cat([attn_ctx, decoder_inputs[i]], dim=1))
+            x = self.dropout(x)
             output, p_gen = self.output_step(x, h_t, c_t, attn_ctx)
             state = (h_t, c_t)
             #comb_h_t = F.tanh(self.hidden_out(torch.cat((attn_ctx, h_t), 1)))
@@ -300,6 +303,7 @@ class PointerNet(nn.Module):
 
         self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, padding_idx=0)
         self.embedding.weight.data.copy_(torch.from_numpy(self.word_emb_mat))
+        self.embedding.weight.requires_grad = False
         self.paragraph_encoder = Encoder(self.embedding_dim,
                                          hps.hidden_dim,
                                          self.n_layers,
@@ -321,7 +325,8 @@ class PointerNet(nn.Module):
         self.decoder = Decoder(self.embedding_dim,
                                self.decoder_hidden_dim, 
                                attn_method=hps.attn_type,
-                               attn_dim=self.decoder_hidden_dim)
+                               attn_dim=self.decoder_hidden_dim,
+                               dropout=hps.dropout)
         
         # output layer
         self.output = nn.Linear(self.decoder_hidden_dim, self.vocab_size)

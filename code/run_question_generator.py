@@ -176,13 +176,15 @@ def main():
     if hps.save and not hps.exp_dir:
         raise Exception('please specify exp_dir when you want to save experiment info')
     
+    print(vars(hps))
     if hps.save:
         utils.save_hps(hps.exp_dir, hps)
 
     net = PointerNet(hps, vocab.emb_mat)
     net = net.cuda()
 
-    model_parameters = filter(lambda p: p.requires_grad, net.parameters())
+    model_parameters = list(filter(lambda p: p.requires_grad, net.parameters()))
+    print('the number of parameters in model:', sum(p.numel() for p in model_parameters))
     optimizer = optim.Adam(model_parameters)
     
     train_data_batcher = Batcher(train_file, vocab, hps, hps.single_pass)
