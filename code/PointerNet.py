@@ -7,77 +7,43 @@ import numpy as np
 import sys
 
 class Encoder(nn.Module):
-    """
-    Encoder class for Pointer-Net
-    """
-
-    def __init__(self, embedding_dim,
-                 hidden_dim,
-                 n_layers,
-                 dropout,
-                 bidir):
-        """
-        Initiate Encoder
-
-        :param Tensor embedding_dim: Number of embbeding channels
-        :param int hidden_dim: Number of hidden units for the LSTM
-        :param int n_layers: Number of layers for LSTMs
-        :param float dropout: Float between 0-1
-        :param bool bidir: Bidirectional
-        """
-
+    def __init__(self, vocab_size,
+                 embedding_dim, hidden_dim,
+                 n_layers, bidir,
+                 dropout_p=0.0, input_dropout_p=0.0,
+                 embedding=None, update_embedding=False):
         super(Encoder, self).__init__()
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers*2 if bidir else n_layers
         self.bidir = bidir
+        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        if embedding is not None:
+            self.embedding.weight = nn.Parameter(embedding)
+        self.embedding.weight.requires_grad = update_embedding
+        self.input_dropout = nn.Dropout(p=input_dropout_p)
         self.lstm = nn.LSTM(embedding_dim,
                             hidden_dim,
                             n_layers,
                             batch_first=True,
-                            dropout=dropout,
+                            dropout=dropout_p,
                             bidirectional=bidir)
 
-        self.h0 = nn.Parameter(torch.zeros(1), requires_grad=False)
-        self.c0 = nn.Parameter(torch.zeros(1), requires_grad=False)
-
-    def forward(self, embedded_inputs, inputs_length, hidden):
-        """
-        Encoder - Forward-pass
-
-        :param Tensor embedded_inputs: Embedded inputs of Pointer-Net
-        :param Tensor init_hidden: Initiated hidden units for the LSTMs (h, c)
-        :return: LSTMs outputs and hidden units (h, c)
-        """
-        batch_size, seq_len, _ = embedded_inputs.size()
-        embedded_inputs = nn.utils.rnn.pack_padded_sequence(embedded_inputs, inputs_length, batch_first=True)
-        outputs, hidden = self.lstm(embedded_inputs, hidden)
+    def forward(self, input_var, input_length):
+        batch_size, seq_len = input_var.size()
+        embedded = self.embedding(input_var)
+        embedded = self.input_dropout(embedded)
+        embedded = nn.utils.rnn.pack_padded_sequence(embedded, inputs_length, batch_first=True)
+        outputs, hidden = self.lstm(embedded)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
         
         if outputs.size(1) < seq_len:
-            hid_dim = outputs.size(2) # if bidir, hid_dim = 2*self.hidden_dim else self.hidden_dim
-            dummy_tensor = torch.tensor(torch.zeros(batch_size, seq_len-outputs.size(1), hid_dim)).cuda()
+            hid_dim = outputs.size(2)
+            dummy_tensor = torch.zeros(batch_size, seq_len-outputs.size(1), hid_dim, 
+                                       device=torch.device('cuda'))
             outputs = torch.cat([outputs, dummy_tensor], 1)
         # outputs shape = [batch_size, seq_len, hid_size * n_dir]
         # hidden shape = [n_layer * n_dir, batch_size, hid_size]
         return outputs, hidden
-
-    def initialize_hidden(self, embedded_inputs):
-        """
-        Initiate hidden units
-
-        :param Tensor embedded_inputs: The embedded input of Pointer-NEt
-        :return: Initiated hidden units for the LSTMs (h, c)
-        """
-        batch_size = embedded_inputs.size(0)
-        # Reshaping (Expanding)
-        # (num_layers * num_directions, batch, hidden_size)
-        h0 = self.h0.unsqueeze(0).unsqueeze(0).repeat(self.n_layers,
-                                                      batch_size,
-                                                      self.hidden_dim)
-        c0 = self.c0.unsqueeze(0).unsqueeze(0).repeat(self.n_layers,
-                                                      batch_size,
-                                                      self.hidden_dim)
-        return h0, c0
 
     def fix_hidden(self, h):
         #  the encoder hidden is  (layers*directions) x batch x dim

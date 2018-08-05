@@ -36,36 +36,30 @@ def word_tokenize(sent):
 
 
 class Example(object):
-    """Class representing a train/val/test example for text summarization."""
-
-    def __init__(self, paragraph, question, answer, answer_indices, vocab, hps):
-        """Initializes the Example, performing tokenization and truncation to produce the encoder, decoder and target sequences, which are stored in self.
-
-        Args:
-            article: source text; a string. each token is separated by a single space.
-            abstract_sentences: list of strings, one per abstract sentence. In each sentence, each token is separated by a single space.
-            vocab: Vocabulary object
-            hps: hyperparameters
-        """
-        self.hps = hps
-
+    
+    def __init__(self, paragraph, question, answer, answer_positions, 
+                 vocab, max_enc_steps, max_dec_steps, dynamic_vocab=False):
+        
+        self.dynamic_vocab = dynamic_vocab
         # Get ids of special tokens
         start_decoding = vocab.word2id(data.START_DECODING)
         stop_decoding = vocab.word2id(data.STOP_DECODING)
 
         paragraph_words = word_tokenize(paragraph)
         question_words = word_tokenize(question)
-        answer_start_idx, answer_end_idx = answer_indices
+        answer_start_idx, answer_end_idx = answer_positions
+        #assert ' '.join(paragraph_words[answer_start_idx:answer_end_idx]) == answer
+        print('cat answer:', ' '.join(paragraph_words[answer_start_idx:answer_end_idx]), 'ans:', answer)
         
         # Process the paragraph
-        if len(paragraph_words) > hps.max_enc_steps:
-            if answer_end_idx <= hps.max_enc_steps:
-                paragraph_words = paragraph_words[:hps.max_enc_steps]
+        if len(paragraph_words) > max_enc_steps:
+            if answer_end_idx <= max_enc_steps:
+                paragraph_words = paragraph_words[:max_enc_steps]
             else:
                 answer_mid_idx = (answer_start_idx + answer_end_idx) // 2
                 # assume len(answer_words) <= len(paragraph_words)
-                paragraph_trunc_end = min(answer_mid_idx + hps.max_enc_steps//2, len(paragraph_words))
-                paragraph_trunc_start = paragraph_trunc_end - hps.max_enc_steps + 1
+                paragraph_trunc_end = min(answer_mid_idx + max_enc_steps//2, len(paragraph_words))
+                paragraph_trunc_start = paragraph_trunc_end - max_enc_steps + 1
                 assert (paragraph_trunc_start <= answer_start_idx) and (paragraph_trunc_end >= answer_end_idx) 
                 paragraph_words = paragraph_words[paragraph_trunc_start:paragraph_trunc_end]
                 answer_start_idx -= paragraph_trunc_start
@@ -77,11 +71,11 @@ class Example(object):
         question_ids = [vocab.word2id(w) for w in question_words] # list of word ids; OOVs are represented by the id for UNK token
 
         # Get the decoder input sequence and target sequence
-        self.dec_input, self.target = self.get_dec_inp_targ_seqs(question_ids, hps.max_dec_steps, start_decoding, stop_decoding)
+        self.dec_input, self.target = self.get_dec_inp_targ_seqs(question_ids, max_dec_steps, start_decoding, stop_decoding)
         self.dec_len = len(self.dec_input)
 
         # If using pointer-generator mode, we need to store some extra info
-        if hps.pointer_gen:
+        if self.dynamic_vocab:
             # Store a version of the enc_input where in-article OOVs are represented by their temporary OOV id; also store the in-article OOVs words themselves
             self.enc_input_extend_vocab, self.paragraph_oovs = data.article2ids(paragraph_words, vocab)
 
@@ -89,7 +83,7 @@ class Example(object):
             question_ids_extend_vocab = data.abstract2ids(question_words, vocab, self.paragraph_oovs)
 
             # Overwrite decoder target sequence so it uses the temp article OOV ids
-            _, self.target = self.get_dec_inp_targ_seqs(question_ids_extend_vocab, hps.max_dec_steps, start_decoding, stop_decoding)
+            _, self.target = self.get_dec_inp_targ_seqs(question_ids_extend_vocab, max_dec_steps, start_decoding, stop_decoding)
 
         # Store the original strings
         self.original_paragraph = paragraph
@@ -136,7 +130,7 @@ class Example(object):
         """Pad the encoder input sequence with pad_id up to max_len."""
         while len(self.enc_input) < max_len:
             self.enc_input.append(pad_id)
-        if self.hps.pointer_gen:
+        if self.dynamic_vocab:
             while len(self.enc_input_extend_vocab) < max_len:
                 self.enc_input_extend_vocab.append(pad_id)
 
@@ -144,7 +138,7 @@ class Example(object):
 class Batch(object):
     """Class representing a minibatch of train/val/test examples for text summarization."""
 
-    def __init__(self, example_list, hps, vocab):
+    def __init__(self, example_list, vocab, max_dec_steps, dynamic_vocab=False):
         """Turns the example_list into a Batch object.
 
         Args:
@@ -152,22 +146,24 @@ class Batch(object):
              hps: hyperparameters
              vocab: Vocabulary object
         """
+        self.max_dec_steps = max_dec_steps
+        self.dynamic_vocab = dynamic_vocab
         self.pad_id = vocab.word2id(data.PAD_TOKEN) # id of the PAD token used to pad sequences
         self.batch_size = len(example_list)
-        self.init_answer_pos(example_list, hps)
-        self.init_encoder_seq(example_list, hps) # initialize the input to the encoder
-        self.init_decoder_seq(example_list, hps) # initialize the input and targets for the decoder
+        self.init_answer_pos(example_list)
+        self.init_encoder_seq(example_list) # initialize the input to the encoder
+        self.init_decoder_seq(example_list) # initialize the input and targets for the decoder
         self.store_orig_strings(example_list) # store the original strings
 
 
-    def init_answer_pos(self, example_list, hps):
-        self.ans_indices = np.zeros((self.batch_size, 2), dtype=np.int32)
+    def init_answer_pos(self, example_list):
+        self.ans_positions = np.zeros((self.batch_size, 2), dtype=np.int32)
 
         for i, ex in enumerate(example_list):
-            self.ans_indices[i, 0] = ex.answer_start_idx
-            self.ans_indices[i, 1] = ex.answer_end_idx
+            self.ans_positions[i, 0] = ex.answer_start_idx
+            self.ans_positions[i, 1] = ex.answer_end_idx
 
-    def init_encoder_seq(self, example_list, hps):
+    def init_encoder_seq(self, example_list):
         """Initializes the following:
                 self.enc_batch:
                     numpy array of shape (batch_size, <=max_enc_steps) containing integer ids (all OOVs represented by UNK id), padded to length of longest sequence in the batch
@@ -205,7 +201,7 @@ class Batch(object):
             #    self.enc_padding_mask[i][j] = 1
 
         # For pointer-generator mode, need to store some extra info
-        if hps.pointer_gen:
+        if self.dynamic_vocab:
             # Determine the max number of in-article OOVs in this batch
             self.max_para_oovs = max([len(ex.paragraph_oovs) for ex in example_list])
             # Store the in-article OOVs themselves
@@ -215,7 +211,7 @@ class Batch(object):
             for i, ex in enumerate(example_list):
                 self.enc_batch_extend_vocab[i, :] = ex.enc_input_extend_vocab[:]
 
-    def init_decoder_seq(self, example_list, hps):
+    def init_decoder_seq(self, example_list):
         """Initializes the following:
                 self.dec_batch:
                     numpy array of shape (batch_size, max_dec_steps), containing integer ids as input for the decoder, padded to max_dec_steps length.
@@ -226,12 +222,12 @@ class Batch(object):
                 """
         # Pad the inputs and targets
         for ex in example_list:
-            ex.pad_decoder_inp_targ(hps.max_dec_steps, self.pad_id)
+            ex.pad_decoder_inp_targ(self.max_dec_steps, self.pad_id)
 
         # Initialize the numpy arrays.
         # Note: our decoder inputs and targets must be the same length for each batch (second dimension = max_dec_steps) because we do not use a dynamic_rnn for decoding. However I believe this is possible, or will soon be possible, with Tensorflow 1.0, in which case it may be best to upgrade to that.
-        self.dec_batch = np.zeros((self.batch_size, hps.max_dec_steps), dtype=np.int32)
-        self.target_batch = np.zeros((self.batch_size, hps.max_dec_steps), dtype=np.int32)
+        self.dec_batch = np.zeros((self.batch_size, self.max_dec_steps), dtype=np.int32)
+        self.target_batch = np.zeros((self.batch_size, self.max_dec_steps), dtype=np.int32)
         #self.dec_padding_mask = np.zeros((hps.batch_size, hps.max_dec_steps), dtype=np.float32)
 
         # Fill in the numpy arrays
@@ -420,4 +416,122 @@ def id2sentence(inputs, vocab, extend_vocab):
         return decoding[0]
     else:
         return decoding
-    
+
+def decoding(id_list, vocab, oov_vocab=None):
+    words = []
+    for i in id_list:
+        try:
+            w = vocab.id2word(i)
+        except ValueError:
+            if oov_vocab:
+                w = oov_vocab[i-vocab.size()]
+            else:
+                raise ValueError('id=%d not in vocab' % i)
+        words.append(w)
+    return words
+
+
+def test_example():
+    #batcher = Batcher(train_file, vocab) 
+    #batch = batcher.next_batch()
+    #batch.enc_batch
+    #batch.dec_batch
+    #batch.target_batch
+    max_enc_steps = 65
+    max_dec_steps = 65
+    word_count_path = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.json'
+    glove_path = '/home/jiananwang/data/glove/glove.840B.300d.txt'
+    embed_dim = 300
+    max_vocab_size = 50000
+    embedding_dict_file = '/home/jiananwang/rl-QG/data/squad-v1/emb_dict_50000.pkl'
+    vocab = data.Vocab(word_count_path, glove_path, embed_dim, max_vocab_size, embedding_dict_file)
+    with open('/home/jiananwang/rl-QG/data/squad-v1/dev_raw.json') as f:
+        d = json.load(f)
+        for ex in d:
+            if ex['ifkeep']:
+                para = ex['correct_sentence']
+                ques = ex['question']
+                ans = ex['valid_answer'][0]
+                ans_pos = (ex['ans_start_in_sent'], ex['ans_end_in_sent'])
+                case = Example(para, ques, ans, ans_pos,
+                               vocab, max_enc_steps, max_dec_steps, dynamic_vocab=True)
+                print('enc len:', case.enc_len)
+                #if not case.dynamic_vocab:
+                print('enc input:', case.enc_input)
+                print('decoding:', ' '.join([vocab.id2word(i) for i in case.enc_input]))
+                
+                print('dec len:', case.dec_len)
+                print('dec input:', case.dec_input)
+                print('decoding:', ' '.join([vocab.id2word(i) for i in case.dec_input]))
+                if not case.dynamic_vocab:
+                    print('target:', case.target)
+                    print('decoding:', ' '.join([vocab.id2word(i) for i in case.target]))
+                print('orig para:', case.original_paragraph)
+                print('orig ques:', case.original_question)
+                print('orig ans:', case.original_answer)
+                print('ans start:', case.answer_start_idx)
+                print('ans end:', case.answer_end_idx)
+                
+                vocab_size = max_vocab_size + 4
+                if case.dynamic_vocab:
+                    print('-'*10, 'dynamic vocab', '-'*10)
+                    print('enc input extend vocab:', case.enc_input_extend_vocab)
+                    words = decoding(case.enc_input_extend_vocab, vocab, case.paragraph_oovs)
+                    print('decoding:', ' '.join(words))
+                    print('new target:', case.target)
+                    words = decoding(case.target, vocab, case.paragraph_oovs)
+                    print('decoding:', ' '.join(words))
+                break
+
+def test_batch():
+    max_enc_steps = 65
+    max_dec_steps = 65
+    word_count_path = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.json'
+    glove_path = '/home/jiananwang/data/glove/glove.840B.300d.txt'
+    embed_dim = 300
+    max_vocab_size = 50000
+    embedding_dict_file = '/home/jiananwang/rl-QG/data/squad-v1/emb_dict_50000.pkl'
+    vocab = data.Vocab(word_count_path, glove_path, embed_dim, max_vocab_size, embedding_dict_file)
+    dynamic_vocab = True
+    with open('/home/jiananwang/rl-QG/data/squad-v1/dev_raw.json') as f:
+        d = json.load(f)
+    example_list = []
+    for ex in d:
+        if ex['ifkeep']:
+            para = ex['correct_sentence']
+            ques = ex['question']
+            ans = ex['valid_answer'][0]
+            ans_pos = (ex['ans_start_in_sent'], ex['ans_end_in_sent'])
+            case = Example(para, ques, ans, ans_pos,
+                           vocab, max_enc_steps, max_dec_steps, dynamic_vocab)
+            example_list.append(case)
+            if len(example_list) == 5:
+                break
+    batch = Batch(example_list, vocab, max_dec_steps, dynamic_vocab)
+    print('enc batch:', batch.enc_batch)
+    if not dynamic_vocab:
+        for i in range(batch.enc_batch.shape[0]):
+            enc = batch.enc_batch[i]
+            dec = batch.dec_batch[i]
+            tgt = batch.target_batch[i]
+            words = decoding(enc.tolist(), vocab)
+            print('enc:', ' '.join(words))
+            words = decoding(dec.tolist(), vocab)
+            print('dec:', ' '.join(words))
+            words = decoding(tgt.tolist(), vocab)
+            print('tgt:', ' '.join(words))
+            print('-'*20)
+    else:
+        for i in range(batch.enc_batch.shape[0]):
+            enc = batch.enc_batch_extend_vocab[i]
+            dec = batch.dec_batch[i]
+            tgt = batch.target_batch[i]
+            oov = batch.para_oovs_batch[i]
+            words = decoding(enc.tolist(), vocab, oov)
+            print('enc one case:', ' '.join(words))
+            print('-'*20)
+        
+if __name__ == '__main__':
+    test_batch()
+    #test_example()
+
