@@ -49,7 +49,6 @@ class Example(object):
         question_words = word_tokenize(question)
         answer_start_idx, answer_end_idx = answer_positions
         #assert ' '.join(paragraph_words[answer_start_idx:answer_end_idx]) == answer
-        print('cat answer:', ' '.join(paragraph_words[answer_start_idx:answer_end_idx]), 'ans:', answer)
         
         # Process the paragraph
         if len(paragraph_words) > max_enc_steps:
@@ -247,18 +246,25 @@ class Batch(object):
 class Batcher(object):
     BATCH_QUEUE_MAX = 10 # max number of batches the batch_queue can hold
 
-    def __init__(self, data_path, vocab, hps, single_pass):
-        self._data_path = data_path
-        self._vocab = vocab
-        self._hps = hps
-        self._single_pass = single_pass
+    def __init__(self, data_path, vocab, batch_size, 
+                 max_enc_steps, max_dec_steps,
+                 mode, single_pass=False, dynamic_vocab=False):
+        self.data_path = data_path
+        self.vocab = vocab
+        self.batch_size = batch_size
+        self.max_enc_steps = max_enc_steps
+        self.max_dec_steps = max_dec_steps
+        self.mode = mode
+        self.single_pass = single_pass
+        self.dynamic_vocab = dynamic_vocab
+
         self._bucketing_cache_size = 3
 
         self.examples = json.load(open(data_path))
         self.data_size = len(self.examples)
 
         self._batch_queue = Queue(self.BATCH_QUEUE_MAX)
-        self._example_queue = Queue(self.BATCH_QUEUE_MAX * self._hps.batch_size)
+        self._example_queue = Queue(self.BATCH_QUEUE_MAX * batch_size)
 
 
     def setup(self):
@@ -267,7 +273,7 @@ class Batcher(object):
         self._ready_to_stop = False
         self._stop = False
 
-        assert (self._hps.batch_size*self._bucketing_cache_size) < self.data_size, 'batch_size is too large'
+        assert (self.batch_size*self._bucketing_cache_size) < self.data_size, 'batch_size is too large'
 
         self._example_q_thread = Thread(target=self.fill_example_queue)
         self._example_q_thread.daemon = True
@@ -279,7 +285,7 @@ class Batcher(object):
 
 
     def fill_example_queue(self):
-        input_gen = text_generator(data.example_generator(self.examples, self._single_pass))
+        input_gen = text_generator(data.example_generator(self.examples, self.single_pass))
 
         while True:
             try:
@@ -288,7 +294,8 @@ class Batcher(object):
                 self._finished_reading = True
                 print('reading data one round finish')
                 break
-            example = Example(paragraph, question, answer, answer_position, self._vocab, self._hps)
+            example = Example(paragraph, question, answer, answer_position, self.vocab,
+                              self.max_enc_steps, self.max_dec_steps, self.dynamic_vocab)
             self._example_queue.put(example)
             #print('put one in example queue: qsize %i' % self._example_queue.qsize())
 
@@ -303,9 +310,9 @@ class Batcher(object):
                 self._ready_to_stop = True
                 break
 
-            if self._hps.mode != 'decode':
+            if self.mode != 'decode':
                 inputs = []
-                for _ in range(self._hps.batch_size * self._bucketing_cache_size):
+                for _ in range(self.batch_size * self._bucketing_cache_size):
                     #print('example qsize:', self._example_queue.qsize())
                     if self._finished_reading and self._example_queue.qsize() == 0:
                         self._prepare_to_stop = True
@@ -317,20 +324,20 @@ class Batcher(object):
 
                 # Group the sorted Examples into batches, optionally shuffle the batches, and place in the batch queue.
                 batches = []
-                for i in range(0, len(inputs), self._hps.batch_size):
-                    end_i = min(i+self._hps.batch_size, len(inputs))
+                for i in range(0, len(inputs), self.batch_size):
+                    end_i = min(i+self.batch_size, len(inputs))
                     batches.append(inputs[i:end_i])
                     #print('batch size:', len(batches[-1]))
-                if not self._single_pass:
+                if not self.single_pass:
                     shuffle(batches) # in each batch, the example is sorted by enc_len
                 for b in batches:  # each b is a list of Example objects
-                    self._batch_queue.put(Batch(b, self._hps, self._vocab))
+                    self._batch_queue.put(Batch(b, self.vocab, self.max_dec_steps, self.dynamic_vocab))
                     #print('batch queue put')
 
             else: # beam search decode mode
                 ex = self._example_queue.get()
-                b = [ex for _ in range(self._hps.batch_size)]
-                self._batch_queue.put(Batch(b, self._hps, self._vocab))
+                b = [ex for _ in range(self.batch_size)]
+                self._batch_queue.put(Batch(b, self.vocab, self.max_dec_steps, self.dynamic_vocab))
 
 
     def next_batch(self):
@@ -492,7 +499,7 @@ def test_batch():
     max_vocab_size = 50000
     embedding_dict_file = '/home/jiananwang/rl-QG/data/squad-v1/emb_dict_50000.pkl'
     vocab = data.Vocab(word_count_path, glove_path, embed_dim, max_vocab_size, embedding_dict_file)
-    dynamic_vocab = True
+    dynamic_vocab =True
     with open('/home/jiananwang/rl-QG/data/squad-v1/dev_raw.json') as f:
         d = json.load(f)
     example_list = []
@@ -529,9 +536,41 @@ def test_batch():
             oov = batch.para_oovs_batch[i]
             words = decoding(enc.tolist(), vocab, oov)
             print('enc one case:', ' '.join(words))
+            words = decoding(dec.tolist(), vocab, oov)
+            print('dec one case:', ' '.join(words))
+            words = decoding(tgt.tolist(), vocab, oov)
+            print('tgt one case:', ' '.join(words))
             print('-'*20)
-        
+
+def test_batcher():
+    max_enc_steps = 65
+    max_dec_steps = 65
+    word_count_path = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.json'
+    glove_path = '/home/jiananwang/data/glove/glove.840B.300d.txt'
+    embed_dim = 300
+    max_vocab_size = 50000
+    embedding_dict_file = '/home/jiananwang/rl-QG/data/squad-v1/emb_dict_%d.pkl' % max_vocab_size
+    vocab = data.Vocab(word_count_path, glove_path, embed_dim, max_vocab_size, embedding_dict_file)
+    data_path = '/home/jiananwang/rl-QG/data/squad-v1/train_raw.json'
+    batch_size = 5
+    dynamic_vocab = False
+    batcher = Batcher(data_path,
+                      vocab,
+                      batch_size,
+                      max_enc_steps, max_dec_steps,
+                      mode='train',
+                      dynamic_vocab=dynamic_vocab)
+    batcher.setup()
+    while True:
+        try:
+            start = time.time()
+            batch = batcher.next_batch()
+            print('time:', time.time()-start)
+        except:
+            break
+
 if __name__ == '__main__':
-    test_batch()
+    test_batcher()
+    #test_batch()
     #test_example()
 

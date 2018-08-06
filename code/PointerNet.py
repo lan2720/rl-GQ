@@ -16,7 +16,7 @@ class Encoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers*2 if bidir else n_layers
         self.bidir = bidir
-        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
         if embedding is not None:
             self.embedding.weight = nn.Parameter(embedding)
         self.embedding.weight.requires_grad = update_embedding
@@ -41,9 +41,9 @@ class Encoder(nn.Module):
             dummy_tensor = torch.zeros(batch_size, seq_len-outputs.size(1), hid_dim, 
                                        device=torch.device('cuda'))
             outputs = torch.cat([outputs, dummy_tensor], 1)
+        return outputs, hidden
         # outputs shape = [batch_size, seq_len, hid_size * n_dir]
         # hidden shape = [n_layer * n_dir, batch_size, hid_size]
-        return outputs, hidden
 
     def fix_hidden(self, h):
         #  the encoder hidden is  (layers*directions) x batch x dim
@@ -57,85 +57,53 @@ class Encoder(nn.Module):
 
 
 class Attention(nn.Module):
-    """
-    Attention model for Pointer-Net
-    """
-
+    
     def __init__(self, method, src_input_dim, tgt_input_dim, attn_dim):
-        """
-        Initiate Attention
-
-        :param int input_dim: Input's diamention
-        :param int hidden_dim: Number of hidden units in the attention
-        """
-
         super(Attention, self).__init__()
         self.method = method
         
-        self.Wa, self.Wh, self.Ws, self.va, self.b_attn = None, None, None, None, None
         if method == 'dot':
             assert src_input_dim == tgt_input_dim, 'Please make sure src_input_dim = tgt_input_dim when Attn=dot'
             self.score = self._dot
         elif method == 'general':
-            self.Wa = nn.Parameter(torch.FloatTensor(tgt_input_dim, src_input_dim))
+            self.ht2ctx = nn.Linear(tgt_input_dim, src_input_dim, bias=False)
             self.score = self._general
         elif method == 'concat':
-            self.Wh = nn.Parameter(torch.FloatTensor(tgt_input_dim, attn_dim))
-            self.Ws = nn.Parameter(torch.FloatTensor(src_input_dim, attn_dim))
-            self.b_attn = nn.Parameter(torch.FloatTensor(attn_dim,))
-            self.va = nn.Parameter(torch.FloatTensor(attn_dim))
+            self.ht2attn = nn.Linear(tgt_input_dim, attn_dim, bias=False)
+            self.ctx2attn = nn.Linear(src_input_dim, attn_dim, bias=False)
+            self.va = nn.Parameter(torch.nn.init.xavier_uniform_(torch.FloatTensor(attn_dim, 1)))
             self.score = self._concat
-
-        self.softmax = nn.Softmax(dim=1)
-
-        # Initialize weight
-        if self.Wa is not None:
-            nn.init.uniform_(self.Wa, -0.1, 0.1)
-        if self.Wh is not None:
-            nn.init.uniform_(self.Wh, -0.1, 0.1)
-        if self.Ws is not None:
-            nn.init.uniform_(self.Ws, -0.1, 0.1)
-        if self.b_attn is not None:
-            nn.init.uniform_(self.b_attn, -0.1, 0.1)
-        if self.va is not None:
-            nn.init.uniform_(self.va, -0.1, 0.1)
+        self.linear_out = nn.Linear(src_input_dim, tgt_input_dim, tgt_input_dim)
     
     def _dot(self, ht, context):
-        # [batch_size, enc_seq_len]
+        # [batch_size, enc_seq_len, hid] dot [batch_size, hid, 1] -> [batch_size, enc_seq_len, 1] -> [batch_size, enc_seq_len]
         return torch.bmm(context, ht.unsqueeze(2)).squeeze(2)
     
     def _general(self, ht, context):
-        return torch.bmm(context, torch.mm(ht, self.Wa).unsqueeze(2)).squeeze(2)
+        return torch.bmm(context, self.ht2ctx(ht).unsqueeze(2)).squeeze(2)
 
     def _concat(self, ht, context):
-        batch_size, seq_len, _ = context.size()
-        concat_tensor = torch.bmm(ht.unsqueeze(1).expand(-1, seq_len, -1), self.Wh.unsqueeze(0).expand(batch_size, -1, -1)) \
-                      + torch.bmm(context, self.Ws.unsqueeze(0).expand(batch_size, -1, -1)) \
-                      + self.b_attn
-        # va = [attn_dim,] -> [1, attn_dim] -> [B, attn_dim] -> [B, attn, 1]
-        return torch.bmm(F.tanh(concat_tensor), 
-                self.va.unsqueeze(0).expand(batch_size, -1).unsqueeze(2)).squeeze(2)
+        batch_size, enc_seq_len, _ = context.size()
+        cat_tensor = F.tanh(self.ht2attn(ht.unsqueeze(1).expand(-1, enc_seq_len, -1))+self.ctx2attn(context))
+        # va = [attn_dim,] -> [1, attn_dim] -> [B, attn_dim] -> [B, attn, 1], [B, enc_seq_len, attn] * [B, attn, 1]
+        return torch.bmm(cat_tensor, 
+                self.va.unsqueeze(0).expand(batch_size, -1, 1)).squeeze(2)
 
-    def forward(self, input, context):
+    def forward(self, ht, context, context_mask):
         """
-        Attention - Forward-pass
-
-        :param Tensor input: Hidden state h, [batch_size, dec_hid_dim]
-        :param Tensor context: Attention context, [batch_size, enc_seq_len, enc_hid_dim]
-        :return: tuple of - (Attentioned hidden state, Alphas)
+        ht: [batch_size, hid_dim]
+        context: [batch_size, enc_max_len, hid_dim]
+        context_mask: [batch_size, enc_max_len]
         """
-        # (batch, seq_len)
-        attn = self.score(input, context)
-
-        # get source mask according to contex
-        context_mask = torch.eq(torch.mean(context, -1), 0)
+        # (batch, enc_seq_len)
+        attn = self.score(ht, context)
         attn.masked_fill_(context_mask, float('-inf'))
-        attn_dist = self.softmax(attn) # [B, seq_len]
-        
+        attn_dist = F.softmax(attn, dim=1) # [B, enc_seq_len]
         # [B, enc_hid_dim]
-        attn_context = torch.bmm(context.permute(0, 2, 1), attn_dist.unsqueeze(2)).squeeze(2)
-
-        return attn_context, attn_dist
+        attn_context = torch.bmm(attn_dist.unsqueeze(1), context).squeeze(1)
+        combined = torch.cat((attn_context, ht), dim=1) # [b, src_dim+tgt_dim]
+        output = F.tanh(self.linear_out(combined))
+        return output, attn_dist
 
 
 class Decoder(nn.Module):
@@ -143,7 +111,11 @@ class Decoder(nn.Module):
     Decoder model for Pointer-Net
     """
 
-    def __init__(self, embedding_dim, hidden_dim, attn_method, attn_dim, dropout):
+    def __init__(self, vocab_size, 
+                 embedding_dim, hidden_dim, 
+                 attn_method, attn_dim,
+                 dropout_p=0.0, input_dropout_p=0.0,
+                 embedding=None, update_embedding=False):
         """
         Initiate Decoder
 
@@ -154,14 +126,21 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
-
-        self.input_to_hidden = nn.Linear(embedding_dim, 4 * hidden_dim)
-        self.hidden_to_hidden = nn.Linear(hidden_dim, 4 * hidden_dim)
-        self.hidden_out = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        if embedding is not None:
+            self.embedding.weight = nn.Parameter(embedding)
+        self.embedding.weight.requires_grad = update_embedding
+        self.input_dropout = nn.Dropout(p=input_dropout_p)
+        self.lstm = nn.LSTM(embedding_dim,
+                            hidden_dim,
+                            n_layers=1,
+                            batch_first=True,
+                            dropout=dropout_p,
+                            bidirectional=False)
         self.attn = Attention(attn_method, hidden_dim, hidden_dim, attn_dim)
         self.calc_attentive_x = nn.Linear(hidden_dim + embedding_dim, hidden_dim)
         # To calculate pgen, we use [context_vector, state.c, state.h, x]
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = nn.Dropout(p=dropout_p)
         self.calc_pgen = nn.Linear(4 * hidden_dim, 1)
 
 
@@ -203,42 +182,65 @@ class Decoder(nn.Module):
         p_gen = F.sigmoid(p_gen)
         return out, p_gen
     
+    def forward_step(self, )
 
-    def forward(self, embedded_inputs, state, context):
-        """
-        Decoder - Forward-pass
+    def forward(self, input_var=None, encoder_hidden=None, encoder_outputs=None,
+                function=F.log_softmax, teacher_forcing_ratio=0):
+        ret_dict = dict()
+        if self.use_attention:
+            ret_dict[Decoder.KEY_ATTN_DIST] = list()
+        if self.use_copy:
+            ret_dict[Decoder.KEY_COPY_PROB] = list()
 
-        :param Tensor embedded_inputs: Embedded inputs of Pointer-Net, [batch_size, seq_len, embed_dim]
-        :param Tensor decoder_input: First decoder's input
-        :param Tensor hidden: First decoder's hidden states
-        :param Tensor context: Encoder's outputs
-        :return: (Output probabilities, Pointers indices), last hidden state
-        """
+        embedded = self.embedding(input_var)
+        embedded = self.input_dropout(embedded) 
 
-        batch_size = embedded_inputs.size(0)
-        input_length = embedded_inputs.size(1)
-        assert context.size(2) == self.hidden_dim, 'Please make sure the encoder output hidden dim = decoder hidden dim'
+        decoder_hidden = self._init_state(encoder_hidden)
+        use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
 
-        outputs = [] # a list of comb_h_t
-        attn_dists = []
-        p_gens = []
-        
-        decoder_inputs = [each.squeeze(1) for each in torch.split(embedded_inputs, 1, dim=1)]
-        # Recurrence loop
-        for i in range(input_length):
-            h_t, c_t, attn_ctx, attn_dist = self.lstm_step(decoder_inputs[i], state, context)
-            attn_ctx = self.dropout(attn_ctx)
-            x = self.calc_attentive_x(torch.cat([attn_ctx, decoder_inputs[i]], dim=1))
-            x = self.dropout(x)
-            output, p_gen = self.output_step(x, h_t, c_t, attn_ctx)
-            state = (h_t, c_t)
-            #comb_h_t = F.tanh(self.hidden_out(torch.cat((attn_ctx, h_t), 1)))
-            attn_dists.append(attn_dist)
-            outputs.append(output)
-            p_gens.append(p_gen)
+        decoder_outputs = []
 
-        return outputs, state, attn_dists, p_gens
+        if use_teacher_forcing:
+            embedded = self.embedding(input_var)
+            embedded = self.input_dropout(embedded)
+            output, hidden = self.lstm(embedded, decoder_hidden)
+            
+            for di in range(input_var.size(1)):
+                
 
+        #batch_size = embedded_inputs.size(0)
+        #input_length = embedded_inputs.size(1)
+        #assert context.size(2) == self.hidden_dim, 'Please make sure the encoder output hidden dim = decoder hidden dim'
+
+        #outputs = [] # a list of comb_h_t
+        #attn_dists = []
+        #p_gens = []
+        #
+        #decoder_inputs = [each.squeeze(1) for each in torch.split(embedded_inputs, 1, dim=1)]
+        ## Recurrence loop
+        #for i in range(input_length):
+        #    h_t, c_t, attn_ctx, attn_dist = self.lstm_step(decoder_inputs[i], state, context)
+        #    attn_ctx = self.dropout(attn_ctx)
+        #    x = self.calc_attentive_x(torch.cat([attn_ctx, decoder_inputs[i]], dim=1))
+        #    x = self.dropout(x)
+        #    output, p_gen = self.output_step(x, h_t, c_t, attn_ctx)
+        #    state = (h_t, c_t)
+        #    #comb_h_t = F.tanh(self.hidden_out(torch.cat((attn_ctx, h_t), 1)))
+        #    attn_dists.append(attn_dist)
+        #    outputs.append(output)
+        #    p_gens.append(p_gen)
+
+        #return outputs, state, attn_dists, p_gens
+    def _init_state(self, encoder_hidden):
+        if encoder_hidden is None:
+            return None
+        encoder_hidden = tuple([self._cat_directions(h) for h in encoder_hidden])
+        return encoder_hidden
+    
+    def _cat_directions(self, h):
+        # (#directions * #layers, #batch, hidden_size) -> (#layers, #batch, #directions * hidden_size)
+        h = torch.cat([h[0:h.size(0):2], h[1:h.size(0):2]], 2)
+        return h
 
 class PointerNet(nn.Module):
     """
@@ -405,4 +407,13 @@ def restore_order(sorted_data, sorted_indices):
     _, raw_indices = torch.sort(sorted_indices, dim=0)
     return sorted_data[raw_indices]
 
+def test_attn():
+    ht = torch.rand(3,5)
+    context = torch.rand(3,4,5)
+    attn = Attention('general', 5,5,5)
+    mask = torch.tensor([[0,0,1,1], [0,0,0,1], [0,1,1,1]], dtype=torch.uint8)
+    attn_ctx, dist = attn(ht, context, mask)
+    print('dist:', dist)
 
+if __name__ == '__main__':
+    test_attn()

@@ -26,6 +26,7 @@ from tqdm import tqdm
 import ujson as json
 import os
 import pickle
+import numpy as np
 
 random.seed(1024)
 
@@ -111,11 +112,12 @@ class Vocab(object):
         self._count += len(embedding_dict)
 
         embedding_dict[PAD_TOKEN] = [0. for _ in range(vec_size)]
-        embedding_dict[UNKNOWN_TOKEN] = [random.uniform(-1, 1) for _ in range(vec_size)]
-        embedding_dict[START_DECODING] = [random.uniform(-1, 1) for _ in range(vec_size)]
-        embedding_dict[STOP_DECODING] = [random.uniform(-1, 1) for _ in range(vec_size)]
+        embedding_dict[UNKNOWN_TOKEN] = [random.uniform(-0.1, 0.1) for _ in range(vec_size)]
+        embedding_dict[START_DECODING] = [random.uniform(-0.1, 0.1) for _ in range(vec_size)]
+        embedding_dict[STOP_DECODING] = [random.uniform(-0.1, 0.1) for _ in range(vec_size)]
 
-        self.emb_mat = [embedding_dict[self._id_to_word[i]] for i in range(self._count)]
+        emb_mat = [embedding_dict[self._id_to_word[i]] for i in range(self._count)]
+        self.emb_mat = np.array(emb_mat)
 
         print("Finished constructing vocabulary of %i total words. Last word added: %s" % (self._count, self._id_to_word[self._count-1]))
 
@@ -316,7 +318,16 @@ def show_abs_oovs(abstract, vocab, article_oovs):
     out_str = ' '.join(new_words)
     return out_str
 
-if __name__ == '__main__':
-    wordcount_file = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.json'
+def hehe():
+    sent_wordcount_file = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.sent.json'
+    #sent_embed_file = '/home/jiananwang/rl-QG/data/squad-v1/sent_emb_dict_45000.pkl'
+    ques_wordcount_file = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.ques.json'
+    #ques_embed_file = '/home/jiananwang/rl-QG/data/squad-v1/ques_emb_dict_28000.pkl'
     emb_file = '/home/jiananwang/data/glove/glove.840B.300d.txt'
-    Vocab(wordcount_file, emb_file, 300)
+    sentence_max_size = 45000
+    question_max_size = 28000
+    a = Vocab(sent_wordcount_file, emb_file, 300, max_size=sentence_max_size, embedding_dict_file=None)
+    b = Vocab(ques_wordcount_file, emb_file, 300, max_size=question_max_size, embedding_dict_file=None)
+
+if __name__ == '__main__':
+    hehe()
