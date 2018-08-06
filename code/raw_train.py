@@ -9,7 +9,7 @@ import torch.nn as nn
 from batcher import Batcher, decoding
 from decoder import Decoder
 
-def hehe():
+def main():
     data_path = '/home/jiananwang/rl-QG/data/squad-v1'
     word_count_path = os.path.join(data_path, 'word_counter.json')
     glove_path = '/home/jiananwang/data/glove/glove.840B.300d.txt'
@@ -94,9 +94,4 @@ def hehe():
                 print(' '.join(words))
 
 if __name__ == '__main__':
-    hehe()
-
-
-
-
-
+    main()
