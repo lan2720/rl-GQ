@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from attention import Attention
+#from old_attention import Attention
 
 
 class Decoder(nn.Module):

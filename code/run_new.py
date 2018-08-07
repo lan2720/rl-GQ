@@ -1,6 +1,5 @@
-from PointerNet import PointerNet
 from data import Vocab
-from batcher import Batcher
+from batcher import Batcher, decoding
 import torch
 import torch.nn as nn
 import argparse
@@ -16,6 +15,9 @@ from nltk.translate.bleu_score import corpus_bleu
 from multi_bleu import bleu
 import utils
 import torch.nn.functional as F
+from seq2seq import Seq2Seq
+from decoder import Decoder
+import data
 # python run_question_generator.py --data_path=../data/squad-v1/ --word_count_path=../data/squad-v1/word_counter.json --glove_path=/home/jiananwang/data/glove/glove.840B.300d.txt --pointer_gen --bidir
 # python run_question_generator.py --data_path=../data/squad-v1/ --word_count_path=../data/squad-v1/word_counter.json --glove_path=/home/jiananwang/data/glove/glove.840B.300d.txt --pointer_gen --bidir --self_critic
 # python run_question_generator.py --exp_dir=../exp/pretrain --data_path=../data/squad-v1/ --word_count_path=../data/squad-v1/word_counter.json --glove_path=/home/jiananwang/data/glove/glove.840B.300d.txt --maxium_likelihood --pointer_gen --bidir --save
@@ -52,9 +54,13 @@ parser.add_argument('--hidden_dim', type=int, default=100,
                     help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--embedding_dim', type=int, default=300,
                     help='whether to use pointer mechanism') # only True when decoding
+parser.add_argument('--update_embedding', default=False, action='store_true',
+                    help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--use_attention', default=False, action='store_true',
                     help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--attn_type', type=str, default='concat', choices=['dot', 'general', 'concat'],
+                    help='whether to use pointer mechanism') # only True when decoding
+parser.add_argument('--dynamic_vocab', default=False, action='store_true',
                     help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--reward_metric', type=str, default='bleu', choices=['bleu'],
                     help='whether to use pointer mechanism') # only True when decoding
@@ -63,6 +69,8 @@ parser.add_argument('--bidir', default=False, action='store_true',
 parser.add_argument('--print_every', type=int, default=100,
                     help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--dropout', type=float, default=0.,
+                    help='whether to use pointer mechanism') # only True when decoding
+parser.add_argument('--teacher_forcing_ratio', type=float, default=0.,
                     help='whether to use pointer mechanism') # only True when decoding
 parser.add_argument('--norm_limit', type=float, default=2.,
                     help='whether to use pointer mechanism') # only True when decoding
@@ -197,7 +205,7 @@ def main():
                                  hps.max_enc_steps, hps.max_dec_steps,
                                  mode=hps.mode, dynamic_vocab=hps.dynamic_vocab)
     #dev_data_batcher = Batcher(dev_file, vocab, hps, hps.single_pass)
-
+    loss = nn.NLLLoss(size_average=False, reduce=False)
     
     global_step = 0
     dev_loss_track = []
@@ -212,7 +220,7 @@ def main():
                 batch = train_data_batcher.next_batch()
                 #print('get next batch time:', time.time()-start)
             except StopIteration:
-                # do evaluation here, if necessary, to save best model
+               # do evaluation here, if necessary, to save best model
                 #dev_data_batcher.setup()
                 #dev_loss = run_eval(dev_data_batcher, net)
                 #print("epoch {}: avg train loss: {:>10.4f}, dev_loss: {:>10.4f}".format(i+1, sum(epoch_loss_track)/len(epoch_loss_track), dev_loss))
@@ -242,7 +250,7 @@ def main():
             flatten_targets = targets.view(-1)
             targets_mask = torch.eq(flatten_targets, data.PAD_ID)
             
-            raw_loss = loss(decoder_outputs.view(-1, model.decoder.output_size), targets.view(-1))
+            raw_loss = loss(decoder_outputs.view(-1, net.decoder.output_size), targets.view(-1))
             raw_loss.masked_fill_(targets_mask, 0.)
             # loss by case = [batch_size, ]
             loss_by_case = torch.sum(raw_loss.view(targets.size()), dim=1)
@@ -260,6 +268,10 @@ def main():
             #print('time one step:', time.time()-start)
             if (global_step == 1) or (global_step % hps.print_every == 0):
                 print('Step {:>5}: ave loss: {:>10.4f}, speed: {:.1f} case/s'.format(global_step, sum(epoch_loss_track)/len(epoch_loss_track), hps.batch_size/(time.time()-start)))
+                seqs = torch.cat(ret_dict[Decoder.KEY_SEQUENCE], dim=1)
+                for s in seqs[:5]:
+                    words = decoding(s.data.tolist(), vocab)
+                    print(' '.join(words))
             
 
 if __name__ == '__main__':

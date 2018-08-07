@@ -18,11 +18,11 @@ def main():
     embedding_dict_file = os.path.join(data_path, 'emb_dict_%d.pkl' % max_vocab_size)
 
     vocab = data.Vocab(word_count_path, glove_path, embedding_dim, max_vocab_size, embedding_dict_file)
-    train_file = os.path.join(data_path, 'train_raw.json')
+    train_file = os.path.join(data_path, 'train_raw_100.json')
     #dev_file = os.path.join(data_path, 'dev_raw.json')#'dev_raw.json')
 
     hidden_dim = 100
-    p = 0.5
+    p = 0.
 
 
     max_enc_steps = 65
@@ -30,7 +30,7 @@ def main():
     dynamic_vocab = False
     use_attention = True
     update_embedding = True
-    batch_size = 100
+    batch_size = 10
 
     model = Seq2Seq(vocab.size(),
                     embedding_dim,
@@ -48,25 +48,26 @@ def main():
 
     model_parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
     print('the number of parameters in model:', sum(p.numel() for p in model_parameters))
-    optimizer = optim.Adam(model_parameters, lr=0.0001)
+    optimizer = optim.Adadelta(model_parameters, lr=1.)
 
     train_data_batcher = Batcher(train_file, vocab, batch_size,
                                  max_enc_steps, max_dec_steps,
                                  mode='train', dynamic_vocab=dynamic_vocab)
     #dev_data_batcher = Batcher(dev_file, vocab, hps, hps.single_pass)
 
-    train_data_batcher.setup()
 
     loss = nn.NLLLoss(size_average=False, reduce=False)
-    tf_ratio = 0.5
+    tf_ratio = 1.0
     
-    num_epoch = 5
+    num_epoch = 50
     for i in range(num_epoch):
+        train_data_batcher.setup()
         while True:
             try:
                 start = time.time()
                 batch = train_data_batcher.next_batch()
             except StopIteration:
+                print('epoch %d finish' % i)
                 break
             
             decoder_outputs, _, ret_dict = model(batch, teacher_forcing_ratio=tf_ratio)
@@ -86,6 +87,7 @@ def main():
             char_ppl = math.exp(ave_loss_by_char.item())
             print('char ppl: %.4f, ave loss by case: %.4f' % (char_ppl, ave_loss_by_case.item()))
             ave_loss_by_case.backward()
+            #nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
             optimizer.step()
 
             seqs = torch.cat(ret_dict[Decoder.KEY_SEQUENCE], dim=1)

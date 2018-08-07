@@ -112,9 +112,9 @@ class Vocab(object):
         self._count += len(embedding_dict)
 
         embedding_dict[PAD_TOKEN] = [0. for _ in range(vec_size)]
-        embedding_dict[UNKNOWN_TOKEN] = [random.uniform(-0.1, 0.1) for _ in range(vec_size)]
-        embedding_dict[START_DECODING] = [random.uniform(-0.1, 0.1) for _ in range(vec_size)]
-        embedding_dict[STOP_DECODING] = [random.uniform(-0.1, 0.1) for _ in range(vec_size)]
+        embedding_dict[UNKNOWN_TOKEN] = [random.uniform(-1, 1) for _ in range(vec_size)]
+        embedding_dict[START_DECODING] = [random.uniform(-1, 1) for _ in range(vec_size)]
+        embedding_dict[STOP_DECODING] = [random.uniform(-1, 1) for _ in range(vec_size)]
 
         emb_mat = [embedding_dict[self._id_to_word[i]] for i in range(self._count)]
         self.emb_mat = np.array(emb_mat)
