@@ -81,7 +81,6 @@ class Attention(nn.Module):
         attn = attn/sum_attn
         #attn.masked_fill_(zero_mask, 0.)
         attn = attn.view(tgt_batch, tgt_len, src_len)
-        print('attn dist:', attn)
 
         # (batch, out_len, in_len) * (batch, in_len, dim) -> (batch, out_len, dim)
         mix = torch.bmm(attn, context)
@@ -89,7 +88,7 @@ class Attention(nn.Module):
         # concat -> (batch, out_len, 2*dim)
         combined = torch.cat((mix, output), dim=2)
         # output -> (batch, out_len, dim)
-        a_output = F.tanh(self.linear_out(combined.view(-1, 2 * dim)).view(tgt_batch, -1, dim))
+        output = self.linear_out(combined.view(-1, 2 * dim)).view(tgt_batch, -1, dim)
         # output ~ [ht, attn_ctx]
 
-        return a_output, attn
+        return output, attn

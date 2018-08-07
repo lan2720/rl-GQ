@@ -74,7 +74,6 @@ class Seq2Seq(nn.Module):
         sentence_variable = torch.tensor(batch.enc_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
         question_variable = torch.tensor(batch.dec_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
         sentence_lengths, sentence_mask = self.length_and_mask(sentence_variable)
-        print('sentence mask:', sentence_mask)
         #target_variable = torch.tensor(batch.target_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
 
         encoder_outputs, encoder_hidden = self.encoder(sentence_variable, sentence_lengths)

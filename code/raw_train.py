@@ -18,7 +18,7 @@ def main():
     embedding_dict_file = os.path.join(data_path, 'emb_dict_%d.pkl' % max_vocab_size)
 
     vocab = data.Vocab(word_count_path, glove_path, embedding_dim, max_vocab_size, embedding_dict_file)
-    train_file = os.path.join(data_path, 'train_raw_100.json')
+    train_file = os.path.join(data_path, 'train_raw.json')
     #dev_file = os.path.join(data_path, 'dev_raw.json')#'dev_raw.json')
 
     hidden_dim = 100
@@ -30,7 +30,7 @@ def main():
     dynamic_vocab = False
     use_attention = True
     update_embedding = True
-    batch_size = 10
+    batch_size = 100
 
     model = Seq2Seq(vocab.size(),
                     embedding_dim,
@@ -48,7 +48,7 @@ def main():
 
     model_parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
     print('the number of parameters in model:', sum(p.numel() for p in model_parameters))
-    optimizer = optim.Adadelta(model_parameters, lr=1.)
+    optimizer = optim.Adagrad(model_parameters)#, lr=1.)
 
     train_data_batcher = Batcher(train_file, vocab, batch_size,
                                  max_enc_steps, max_dec_steps,
