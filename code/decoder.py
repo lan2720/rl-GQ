@@ -64,7 +64,7 @@ class Decoder(nn.Module):
                  n_layers,
                  max_len, sos_id, eos_id,
                  input_dropout_p=0, dropout_p=0, 
-                 use_attention=False):#, use_copy=False):
+                 use_attention=False, use_copy=False):
         super(Decoder, self).__init__()
         self.embedding = embedding
         self.hidden_dim = hidden_dim

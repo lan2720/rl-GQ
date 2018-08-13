@@ -61,10 +61,6 @@ class Seq2Seq(nn.Module):
                                input_dropout_p=dropout_ratio,
                                use_attention=use_attention)
 
-    def flatten_parameters(self):
-        self.encoder.rnn.flatten_parameters()
-        self.decoder.rnn.flatten_parameters()
-    
     def length_and_mask(self, x):
         mask = torch.eq(x, data.PAD_ID)
         length = x.size(1) - torch.sum(mask, dim=1)
@@ -83,3 +79,5 @@ class Seq2Seq(nn.Module):
                               encoder_mask=sentence_mask,
                               teacher_forcing_ratio=teacher_forcing_ratio)
         return result
+    
+

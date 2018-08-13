@@ -82,7 +82,7 @@ class Example(object):
             question_ids_extend_vocab = data.abstract2ids(question_words, vocab, self.paragraph_oovs)
 
             # Overwrite decoder target sequence so it uses the temp article OOV ids
-            _, self.target = self.get_dec_inp_targ_seqs(question_ids_extend_vocab, max_dec_steps, start_decoding, stop_decoding)
+            self.dec_input_extend_vocab, self.target = self.get_dec_inp_targ_seqs(question_ids_extend_vocab, max_dec_steps, start_decoding, stop_decoding)
 
         # Store the original strings
         self.original_paragraph = paragraph
@@ -485,6 +485,9 @@ def test_example():
                     print('enc input extend vocab:', case.enc_input_extend_vocab)
                     words = decoding(case.enc_input_extend_vocab, vocab, case.paragraph_oovs)
                     print('decoding:', ' '.join(words))
+                    print('new dec input:', case.dec_input_extend_vocab)
+                    words = decoding(case.dec_input_extend_vocab, vocab, case.paragraph_oovs)
+                    print('decoding:', ' '.join(words))
                     print('new target:', case.target)
                     words = decoding(case.target, vocab, case.paragraph_oovs)
                     print('decoding:', ' '.join(words))
@@ -570,7 +573,7 @@ def test_batcher():
             break
 
 if __name__ == '__main__':
-    test_batcher()
+    #test_batcher()
     #test_batch()
-    #test_example()
+    test_example()
 
