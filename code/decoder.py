@@ -68,8 +68,9 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.embedding = embedding
         self.hidden_dim = hidden_dim
+        self.embed_dim = embedding.embedding_dim
         self.input_dropout = nn.Dropout(p=input_dropout_p)
-        self.lstm = nn.LSTM(self.embedding.embedding_dim,
+        self.lstm = nn.LSTM(self.embed_dim,
                             hidden_dim,
                             n_layers,
                             batch_first=True,
@@ -79,12 +80,15 @@ class Decoder(nn.Module):
         self.output_size = self.embedding.num_embeddings
         self.max_length = max_len # for when not teacher forcing
         self.use_attention = use_attention
+        self.use_copy = use_copy
         #self.use_copy = use_copy
         self.eos_id = eos_id
         self.sos_id = sos_id
 
         if use_attention:
             self.attention = Attention(self.hidden_dim)
+        if use_copy:
+            self.generation = nn.Linear(self.hidden_dim+self.embed_dim, 1)
 
         self.out = nn.Linear(self.hidden_dim, self.output_size)
 
@@ -97,10 +101,14 @@ class Decoder(nn.Module):
         output, hidden = self.lstm(embedded, hidden)
 
         attn = None
+        p_gen = None
         if self.use_attention:
+            # output ~ [ht, attn_ctx]
             output, attn = self.attention(output, encoder_outputs, encoder_mask)
+        if self.use_copy:
+            p_gen = self.generation(torch.cat((output, embedded), dim=2).view(batch_size*dec_len, -1)).squeeze(2).view(batch_size, dec_len)
         predicted_softmax = function(self.out(output.contiguous().view(-1, self.hidden_dim)), dim=1).view(batch_size, dec_len, -1)
-        return predicted_softmax, hidden, attn
+        return predicted_softmax, hidden, attn, p_gen
 
     def forward(self, inputs=None, encoder_hidden=None, encoder_outputs=None, encoder_mask=None,
                     function=F.log_softmax, teacher_forcing_ratio=0):
@@ -137,7 +145,7 @@ class Decoder(nn.Module):
         # Manual unrolling is used to support random teacher forcing.
         # If teacher_forcing_ratio is True or False instead of a probability, the unrolling can be done in graph
         if use_teacher_forcing:
-            decoder_output, decoder_hidden, attn = self.forward_step(inputs, decoder_hidden,
+            decoder_output, decoder_hidden, attn, p_gen = self.forward_step(inputs, decoder_hidden,
                                                                      encoder_outputs, encoder_mask,
                                                                      function=function)
 
@@ -151,7 +159,7 @@ class Decoder(nn.Module):
         else:
             decoder_input = inputs[:, 0].unsqueeze(1)
             for di in range(max_length):
-                decoder_output, decoder_hidden, step_attn = self.forward_step(decoder_input, decoder_hidden, 
+                decoder_output, decoder_hidden, step_attn, step_p_gen = self.forward_step(decoder_input, decoder_hidden, 
                                                                          encoder_outputs, encoder_mask,
                                                                          function=function)
                 step_output = decoder_output.squeeze(1)

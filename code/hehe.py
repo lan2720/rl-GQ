@@ -103,7 +103,6 @@ def loss(target, vocab_dist, target_mask, use_copy=False,
     return loss
 
 
-
 def main():
     enc_seq_len = 5
     dec_seq_len = 5

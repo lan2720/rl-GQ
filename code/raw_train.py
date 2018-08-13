@@ -72,13 +72,23 @@ def main():
             
             decoder_outputs, _, ret_dict = model(batch, teacher_forcing_ratio=tf_ratio)
             # list -> [batch_size, dec_len, vocab_size]
-            decoder_outputs = torch.stack(decoder_outputs, dim=1)
+            vocab_dist = torch.stack(decoder_outputs, dim=1)
 
             targets = torch.tensor(batch.target_batch, dtype=torch.int64, requires_grad=False, device=torch.device('cuda'))
-            flatten_targets = targets.view(-1)
-            targets_mask = torch.eq(flatten_targets, data.PAD_ID)
+            targets_mask = torch.eq(targets, data.PAD_ID)
             
-            raw_loss = loss(decoder_outputs.view(-1, model.decoder.output_size), targets.view(-1))
+            #raw_loss = loss(decoder_outputs.view(-1, model.decoder.output_size), targets.view(-1))
+            # TODO: p_gen
+            if use_copy:
+                attn_dist = torch.stack(ret_dict[Decoder.KEY_ATTN_SCORE], dim=1)
+                p_gen = 
+            else:
+                attn_dist = None
+                p_gen = None
+
+            raw_loss = loss(targets, vocab_dist, targets_mask, use_copy=use_copy,
+        attn_dist=attn_dist, p_gen=p_gen, enc_input_extended_vocab=batch.enc_input_extend_vocab, max_enc_oovs=batch.max_enc_oovs)
+ 
             raw_loss.masked_fill_(targets_mask, 0.)
             # loss by case = [batch_size, ]
             loss_by_case = torch.sum(raw_loss.view(targets.size()), dim=1)
@@ -94,6 +104,7 @@ def main():
             for s in seqs:
                 words = decoding(s.data.tolist(), vocab)
                 print(' '.join(words))
+
 
 if __name__ == '__main__':
     main()

@@ -76,10 +76,10 @@ class Example(object):
         # If using pointer-generator mode, we need to store some extra info
         if self.dynamic_vocab:
             # Store a version of the enc_input where in-article OOVs are represented by their temporary OOV id; also store the in-article OOVs words themselves
-            self.enc_input_extend_vocab, self.paragraph_oovs = data.article2ids(paragraph_words, vocab)
+            self.enc_input_extend_vocab, self.enc_oovs = data.article2ids(paragraph_words, vocab)
 
             # Get a verison of the reference summary where in-article OOVs are represented by their temporary article OOV id
-            question_ids_extend_vocab = data.abstract2ids(question_words, vocab, self.paragraph_oovs)
+            question_ids_extend_vocab = data.abstract2ids(question_words, vocab, self.enc_oovs)
 
             # Overwrite decoder target sequence so it uses the temp article OOV ids
             self.dec_input_extend_vocab, self.target = self.get_dec_inp_targ_seqs(question_ids_extend_vocab, max_dec_steps, start_decoding, stop_decoding)
@@ -202,9 +202,9 @@ class Batch(object):
         # For pointer-generator mode, need to store some extra info
         if self.dynamic_vocab:
             # Determine the max number of in-article OOVs in this batch
-            self.max_para_oovs = max([len(ex.paragraph_oovs) for ex in example_list])
+            self.max_enc_oovs = max([len(ex.enc_oovs) for ex in example_list])
             # Store the in-article OOVs themselves
-            self.para_oovs_batch = [ex.paragraph_oovs for ex in example_list]
+            self.enc_oovs_batch = [ex.enc_oovs for ex in example_list]
             # Store the version of the enc_batch that uses the article OOV ids
             self.enc_batch_extend_vocab = np.zeros((self.batch_size, max_enc_seq_len), dtype=np.int32)
             for i, ex in enumerate(example_list):

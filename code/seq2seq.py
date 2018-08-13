@@ -79,5 +79,3 @@ class Seq2Seq(nn.Module):
                               encoder_mask=sentence_mask,
                               teacher_forcing_ratio=teacher_forcing_ratio)
         return result
-    
-
