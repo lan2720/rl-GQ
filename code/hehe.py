@@ -1,42 +1,6 @@
 # coding:utf-8
 import torch
 
-#def forward_step(self, input_var, hidden, encoder_outputs, encoder_mask, function):
-#    # input_var: dec inputs = [batch_size, dec_seq_len]
-#    # hidden: dec initial h0
-#    # encoder_outputs: [batch_size, enc_seq_len, hid]
-#    # encoder_mask [batch_size, enc_seq_len]
-#
-#    # How to compute p_gen
-#    # p_gen: a scalar  = sigmoid(wh*ht + ws*st + wx*xt + bias)
-#    # ht: context vector (mix), st: decoder state, xt: decoder input
-#    # ht = [batch_size, dec_seq_len, hid]
-#    # st = [batch_size, dec_seq_len, hid]
-#    # xt = [batch_size, dec_seq_len, emb_dim]
-#    # -> p_gen = [batch_size, dec_seq_len]
-#    # cat_fea = torch.cat([mix, dec_output, dec_input], dim=2)
-#    # nn.Linear(hid*2+emb_dim, 1)
-#    # linear(cat_fea) -> [batch_Size, dec_seq_len, 1] -> squeeze(2) -> [batch_size, dec_seq_len] as p_gen
-#
-#    
-#    batch_size = input_var.size(0)
-#    dec_len = input_var.size(1)
-#    embedded = self.embedding(input_var)
-#    embedded = self.input_dropout(embedded)
-#    
-#    output, hidden = self.lstm(embedded, hidden)
-#
-#    attn = None
-#    if self.use_attention:
-#        output, attn_dist = self.attention(output, encoder_outputs, encoder_mask)
-#    if self.use_copy:
-#        vocab_dist = F.softmax(self.out.contiguous().view(-1, self.hidden_dim), dim=1).view(batch_size, dec_len, -1)
-#        predicted_softmax = calc_final_dist(p_gen, vocab_dist, attn_dist)
-#        predicted_softmax = F.
-#    predicted_softmax = function(self.out(output.contiguous().view(-1, self.hidden_dim)), dim=1).view(batch_size, dec_len, -1)
-#    return predicted_softmax, hidden, attn
-
-
 
 def loss(target, vocab_dist, target_mask, use_copy=False,
     attn_dist=None, p_gen=None, enc_input_extended_vocab=None, max_enc_oovs=None):
@@ -66,7 +30,7 @@ def loss(target, vocab_dist, target_mask, use_copy=False,
     batch_size, dec_seq_len = target.size()
     vocab_size = vocab_dist.size(2)
     if not use_copy:
-        # 都不适用 or 单纯使用attention没有copy
+        # 都不用 or 单纯使用attention没有copy
         # 1. 有vocab_dist和target, 但不用attention和copy
         # 将target部位的prob拿出来，得到[batch_size, dec_seq_len]
         final_dist = vocab_dist
@@ -122,17 +86,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-#def calc_final_dist(self, p_gen, vocab_dists, attn_dists):
-#    vocab_dists = [p_gen * dist for (p_gen,dist) in zip(self.p_gens, vocab_dists)]
-#    attn_dists = [(1-p_gen) * dist for (p_gen,dist) in zip(self.p_gens, attn_dists)]
-#    batch_size = vocab_dists[0].size(0)
-#    if self.max_para_oovs > 0:
-#        extra_zeros = torch.zeros((batch_size, self.max_para_oovs)).cuda()
-#        vocab_dists_extended = [torch.cat([dist, extra_zeros], dim=1) for dist in vocab_dists]
-#    else:
-#        vocab_dists_extended = vocab_dists
-#    extended_vsize = self.vocab_size + self.max_para_oovs
-#    attn_dists_projected =  [torch.zeros(batch_size, extended_vsize).cuda().scatter_add_(1, self.paragraph_inputs_extend_vocab, copy_dist) for copy_dist in attn_dists]
-#    
-#    final_dists = [vocab_dist + copy_dist for (vocab_dist,copy_dist) in zip(vocab_dists_extended, attn_dists_projected)]
-#    return final_dists

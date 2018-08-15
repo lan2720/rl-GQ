@@ -1,6 +1,14 @@
 import os
 import pickle
 import torch
+import data
+
+
+def length_and_mask(x):
+    mask = torch.eq(x, data.PAD_ID)
+    length = x.size(1) - torch.sum(mask, dim=1)
+    return length, mask
+
 
 def save_model(save_dir, model, min_dev_loss):
     save_model_path = os.path.join(save_dir, 'saved_models')

@@ -1,0 +1,10 @@
+data/
+abisee_preprocess/
+exp/
+sh/
+__pycache__/
+.idea/
+
+*pyc
+.gitignore
+*.pkl

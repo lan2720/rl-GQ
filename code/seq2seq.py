@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 from encoder import Encoder
 from decoder import Decoder
+from utils import length_and_mask
+
 
 class Seq2Seq(nn.Module):
     """ Standard sequence-to-sequence architecture with configurable encoder
@@ -38,12 +40,14 @@ class Seq2Seq(nn.Module):
     def __init__(self, vocab_size, embedding_dim,
                  hidden_dim, enc_n_layers, 
                  dec_n_layers, dec_max_length,
-                 dropout_ratio, use_attention=False,
-                 embedding=None, update_embedding=False):
+                 dropout_ratio,
+                 use_attention=False,
+                 use_copy=False,
+                 pretrain_w2v=None, update_embedding=False):
         super(Seq2Seq, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        if embedding is not None:
-            self.embedding.weight = nn.Parameter(torch.from_numpy(embedding).float())
+        if pretrain_w2v is not None:
+            self.embedding.weight = nn.Parameter(torch.from_numpy(pretrain_w2v).float())
         self.embedding.weight.requires_grad = update_embedding
         self.encoder = Encoder(self.embedding,
                                hidden_dim,
@@ -59,23 +63,17 @@ class Seq2Seq(nn.Module):
                                data.GO_ID, data.EOS_ID,
                                dropout_p=dropout_ratio,
                                input_dropout_p=dropout_ratio,
-                               use_attention=use_attention)
+                               use_attention=use_attention,
+                               use_copy=use_copy)
 
-    def length_and_mask(self, x):
-        mask = torch.eq(x, data.PAD_ID)
-        length = x.size(1) - torch.sum(mask, dim=1)
-        return length, mask
+    def forward(self, batch):
+        encoder_input_variable = torch.tensor(batch.enc_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
+        decoder_input_variable = torch.tensor(batch.dec_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
+        encoder_input_lengths, encoder_input_mask = length_and_mask(encoder_input_variable)
 
-    def forward(self, batch, teacher_forcing_ratio=0):
-        sentence_variable = torch.tensor(batch.enc_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
-        question_variable = torch.tensor(batch.dec_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
-        sentence_lengths, sentence_mask = self.length_and_mask(sentence_variable)
-        #target_variable = torch.tensor(batch.target_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
-
-        encoder_outputs, encoder_hidden = self.encoder(sentence_variable, sentence_lengths)
-        result = self.decoder(inputs=question_variable,
+        encoder_outputs, encoder_hidden = self.encoder(encoder_input_variable, encoder_input_lengths)
+        result = self.decoder(inputs=decoder_input_variable,
                               encoder_hidden=encoder_hidden,
                               encoder_outputs=encoder_outputs,
-                              encoder_mask=sentence_mask,
-                              teacher_forcing_ratio=teacher_forcing_ratio)
+                              encoder_mask=encoder_input_mask)
         return result
