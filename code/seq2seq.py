@@ -70,16 +70,13 @@ class Seq2Seq(nn.Module):
 
     def forward(self, batch):
         encoder_input_variable = torch.tensor(batch.enc_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
-        #if not self.use_copy:
         dec_batch = batch.dec_batch
-        #else:
-        #   dec_batch = batch.dec_batch_extend_vocab
         decoder_input_variable = torch.tensor(dec_batch, dtype=torch.long, requires_grad=False, device=torch.device('cuda'))
         encoder_input_lengths, encoder_input_mask = length_and_mask(encoder_input_variable)
 
         encoder_outputs, encoder_hidden = self.encoder(encoder_input_variable, encoder_input_lengths)
         
-        enc_inputs_extend_vocab = None
+        enc_inputs_extend_vocab_variable = None
         max_enc_oov = None
         if self.use_copy:
             enc_inputs_extend_vocab_variable = torch.tensor(batch.enc_batch_extend_vocab, dtype=torch.long, 
