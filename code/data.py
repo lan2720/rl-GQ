@@ -318,16 +318,11 @@ def show_abs_oovs(abstract, vocab, article_oovs):
     out_str = ' '.join(new_words)
     return out_str
 
-def hehe():
-    sent_wordcount_file = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.sent.json'
-    #sent_embed_file = '/home/jiananwang/rl-QG/data/squad-v1/sent_emb_dict_45000.pkl'
-    ques_wordcount_file = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.ques.json'
-    #ques_embed_file = '/home/jiananwang/rl-QG/data/squad-v1/ques_emb_dict_28000.pkl'
+def create_emb_dict_file():
+    wordcount_file = '/home/jiananwang/rl-QG/data/squad-v1/word_counter.json'
     emb_file = '/home/jiananwang/data/glove/glove.840B.300d.txt'
-    sentence_max_size = 45000
-    question_max_size = 28000
-    a = Vocab(sent_wordcount_file, emb_file, 300, max_size=sentence_max_size, embedding_dict_file=None)
-    b = Vocab(ques_wordcount_file, emb_file, 300, max_size=question_max_size, embedding_dict_file=None)
+    max_vocab_size = 50000
+    a = Vocab(wordcount_file, emb_file, 300, max_size=max_vocab_size, embedding_dict_file=None)
 
 if __name__ == '__main__':
-    hehe()
+    create_emb_dict_file()
