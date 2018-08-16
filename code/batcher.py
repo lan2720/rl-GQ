@@ -17,6 +17,7 @@
 """This file contains code to process data into batches"""
 
 from multiprocessing import Queue
+import random
 from random import shuffle
 from threading import Thread
 import time
@@ -29,6 +30,7 @@ import ujson as json
 nlp = spacy.load('en', disable=['parser', 'tagger', 'ner'])
 nlp.add_pipe(nlp.create_pipe('sentencizer'))
 
+random.seed(1024)
 
 def word_tokenize(sent):
     doc = nlp(sent)
@@ -121,6 +123,9 @@ class Example(object):
         """Pad decoder input and target sequences with pad_id up to max_len."""
         while len(self.dec_input) < max_len:
             self.dec_input.append(pad_id)
+        if self.dynamic_vocab:
+            while len(self.dec_input_extend_vocab) < max_len:
+                self.dec_input_extend_vocab.append(pad_id)
         while len(self.target) < max_len:
             self.target.append(pad_id)
 
@@ -235,6 +240,10 @@ class Batch(object):
             self.target_batch[i, :] = ex.target[:] # ex.target has consider the oov word
             #for j in xrange(ex.dec_len):
             #    self.dec_padding_mask[i][j] = 1
+        if self.dynamic_vocab:
+            self.dec_batch_extend_vocab = np.zeros((self.batch_size, self.max_dec_steps), dtype=np.int32)
+            for i, ex in enumerate(example_list):
+                self.dec_batch_extend_vocab[i, :] = ex.dec_input_extend_vocab[:]
 
     def store_orig_strings(self, example_list):
         """Store the original article and abstract strings in the Batch object"""
@@ -258,7 +267,7 @@ class Batcher(object):
         self.single_pass = single_pass
         self.dynamic_vocab = dynamic_vocab
 
-        self._bucketing_cache_size = 3
+        self._bucketing_cache_size = 1#3
 
         self.examples = json.load(open(data_path))
         self.data_size = len(self.examples)
@@ -273,7 +282,7 @@ class Batcher(object):
         self._ready_to_stop = False
         self._stop = False
 
-        assert (self.batch_size*self._bucketing_cache_size) < self.data_size, 'batch_size is too large'
+        #assert (self.batch_size*self._bucketing_cache_size) < self.data_size, 'batch_size is too large'
 
         self._example_q_thread = Thread(target=self.fill_example_queue)
         self._example_q_thread.daemon = True
@@ -483,13 +492,13 @@ def test_example():
                 if case.dynamic_vocab:
                     print('-'*10, 'dynamic vocab', '-'*10)
                     print('enc input extend vocab:', case.enc_input_extend_vocab)
-                    words = decoding(case.enc_input_extend_vocab, vocab, case.paragraph_oovs)
+                    words = decoding(case.enc_input_extend_vocab, vocab, case.enc_oovs)
                     print('decoding:', ' '.join(words))
                     print('new dec input:', case.dec_input_extend_vocab)
-                    words = decoding(case.dec_input_extend_vocab, vocab, case.paragraph_oovs)
+                    words = decoding(case.dec_input_extend_vocab, vocab, case.enc_oovs)
                     print('decoding:', ' '.join(words))
                     print('new target:', case.target)
-                    words = decoding(case.target, vocab, case.paragraph_oovs)
+                    words = decoding(case.target, vocab, case.enc_oovs)
                     print('decoding:', ' '.join(words))
                 break
 

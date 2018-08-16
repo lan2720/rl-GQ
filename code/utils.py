@@ -2,6 +2,7 @@ import os
 import pickle
 import torch
 import data
+import numpy as np
 
 
 def length_and_mask(x):
@@ -9,6 +10,28 @@ def length_and_mask(x):
     length = x.size(1) - torch.sum(mask, dim=1)
     return length, mask
 
+def stable_softmax(x, mask=None):
+    """
+    x: [batch_size, seq_len, out_size] mask: the same shape with x
+    or 
+    x: [batch_size, out_size] mask: the same shape with x
+    """
+    orig_size = x.size()
+    out_size = orig_size[-1]
+    if mask is not None:
+        assert x.size() == mask.size()
+        mask = mask.contiguous().view(-1, out_size)
+        x = x.view(-1, out_size) * (1.0 - mask.float())
+    else:
+        x = x.view(-1, out_size)
+    max_by_row = torch.max(x, dim=1, keepdim=True)[0]
+    if mask is not None:
+        numerator = torch.exp(x-max_by_row)*(1.0 - mask.float()) 
+    else:
+        numerator = torch.exp(x-max_by_row)
+    denominator = torch.sum(numerator, dim=1, keepdim=True)
+    softmax = numerator/denominator
+    return softmax.view(orig_size)
 
 def save_model(save_dir, model, min_dev_loss):
     save_model_path = os.path.join(save_dir, 'saved_models')
@@ -41,4 +64,9 @@ def load_model(args):
         print(f"No available model such as {path}.")
         exit()
 
+def main():
+    vec = np.array([12345, 67890, 99999999])
+    stable_softmax(torch.tensor(vec, dtype=torch.float))#, mask=torch.tensor([0,0,0]))
 
+if __name__ == '__main__':
+    main()

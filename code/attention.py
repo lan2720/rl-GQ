@@ -1,8 +1,9 @@
+import sys
 import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from utils import stable_softmax
 
 class Attention(nn.Module):
     r"""
@@ -50,6 +51,7 @@ class Attention(nn.Module):
     def forward(self, output, context, mask):
         # refer to OpenNMT-py
         # https://github.com/OpenNMT/OpenNMT-py/blob/master/onmt/modules/global_attention.py#L121
+
         dim = self.dim
         src_batch, src_len, src_dim = context.size()
         tgt_batch, tgt_len, tgt_dim = output.size()
@@ -57,30 +59,68 @@ class Attention(nn.Module):
         assert src_dim == tgt_dim
         assert src_dim == self.dim
 
+        hehe = torch.isnan(output)
+        if torch.sum(hehe) > 0:
+            print('nan found in output:', output)
+            for i in range(tgt_batch):
+                for j in range(tgt_len):
+                    bb = torch.isnan(output[i,j,:])
+                    if torch.sum(bb) > 0:
+                        print(output[i,j,:])
+            sys.exit()
+        hehe = torch.isnan(context)
+        if torch.sum(hehe) > 0:
+            print('nan found in context:', context)
+            sys.exit()
+
         wq = self.linear_query(output.contiguous().view(-1, dim))
         wq = wq.view(tgt_batch, tgt_len, 1, dim)
         wq = wq.expand(tgt_batch, tgt_len, src_len, dim)
+        
+        hehe = torch.isnan(wq)
+        if torch.sum(hehe) > 0:
+            print('nan found in wq:', wq)
+            sys.exit()
 
         uh = self.linear_context(context.contiguous().view(-1, dim))
         uh = uh.view(src_batch, 1, src_len, dim)
         uh = uh.expand(src_batch, tgt_len, src_len, dim)
 
+        hehe = torch.isnan(uh)
+        if torch.sum(hehe) > 0:
+            print('nan found in uh:', uh)
+            sys.exit()
+
         wquh = F.tanh(wq + uh)
         
+        hehe = torch.isnan(wquh)
+        if torch.sum(hehe) > 0:
+            print('nan found in wquh:', wquh)
+            sys.exit()
+
         score = self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
-        
+        hehe = torch.isnan(score)
+        if torch.sum(hehe) > 0:
+            print('nan found in score:', score)
+            for i in range(tgt_batch):
+                for j in range(tgt_len):
+                    bb = torch.isnan(score[i,j,:])
+                    if torch.sum(bb) > 0:
+                        print(score[i,j,:])
+            sys.exit()
         # mask = [batch_size, tgt_len, src_len]
-        mask = mask.unsqueeze(1).expand_as(score).contiguous().view(src_batch*tgt_len, src_len)
-        #score.data.masked_fill_(mask, -float('inf'))
-        score = score.view(tgt_batch*tgt_len, src_len)
-        max_by_row = torch.max(score, dim=1, keepdim=True)[0]
-        #attn = F.softmax(score-max_by_row, dim=1).view(tgt_batch, tgt_len, src_len)
-        attn = torch.exp(score-max_by_row) * (1.0 - mask.float())
-        sum_attn = torch.sum(attn, dim=1, keepdim=True)
-        #zero_mask = torch.eq(attn, 0.)
-        attn = attn/sum_attn
-        #attn.masked_fill_(zero_mask, 0.)
-        attn = attn.view(tgt_batch, tgt_len, src_len)
+        mask = mask.unsqueeze(1).expand_as(score)#.contiguous().view(src_batch*tgt_len, src_len)
+        attn = stable_softmax(score, mask)
+        ##score.data.masked_fill_(mask, -float('inf'))
+        #score = score.view(tgt_batch*tgt_len, src_len)
+        #max_by_row = torch.max(score, dim=1, keepdim=True)[0]
+        ##attn = F.softmax(score-max_by_row, dim=1).view(tgt_batch, tgt_len, src_len)
+        #attn = torch.exp(score-max_by_row) * (1.0 - mask.float())
+        #sum_attn = torch.sum(attn, dim=1, keepdim=True)
+        ##zero_mask = torch.eq(attn, 0.)
+        #attn = attn/sum_attn
+        ##attn.masked_fill_(zero_mask, 0.)
+        #attn = attn.view(tgt_batch, tgt_len, src_len)
 
         # (batch, out_len, in_len) * (batch, in_len, dim) -> (batch, out_len, dim)
         mix = torch.bmm(attn, context)

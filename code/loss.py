@@ -3,13 +3,13 @@ import torch
 
 
 def loss(target, vocab_dist, target_mask, use_copy=False,
-    attn_dist=None, p_gen=None, enc_input_extended_vocab=None, max_enc_oovs=None):
+    attn_dist=None, p_copy=None, enc_batch_extend_vocab=None, max_enc_oovs=None):
     """
     target: [batch_size, dec_seq_len]
     vocab_dist: [batch_size, dec_seq_len, vocab_size]
     target_mask: [batch_size, dec_seq_len]
     attn_dist: [batch_size, dec_seq_len, enc_seq_len]
-    p_gen = [batch_size, dec_seq_len]
+    p_copy = [batch_size, dec_seq_len]
     enc_input_extended_vocab: [batch_size, dec_seq_len]
     max_enc_oovs: a scalar
 
@@ -37,15 +37,18 @@ def loss(target, vocab_dist, target_mask, use_copy=False,
     else:
         # 使用copy
         assert attn_dist is not None, "If use copy mechanism, please give attention distribution"
-        assert p_gen is not None, "If use copy mechanism, please give p_gen (p_copy=1-p_gen)"
-        assert enc_input_extended_vocab is not None, "If use copy mechanism, please give enc_input_extended_vocab"
+        assert p_copy is not None, "If use copy mechanism, please give p_copy"
+        assert enc_batch_extend_vocab is not None, "If use copy mechanism, please give enc_input_extended_vocab"
         assert max_enc_oovs, "If use copy mechanism, please give max_enc_oovs, which is a scalar for each batch"
-        # p_gen = [batch_size, dec_seq_len]
-        p_gen.unsqueeze_(2)
-        vocab_dist = p_gen * vocab_dist
-        attn_dist = (1.0-p_gen) * attn_dist
+        # p_copy = [batch_size, dec_seq_len]
+        p_copy.unsqueeze_(2)
+        print('p_copy:', p_copy.size())
+        print('vocab dist:', vocab_dist.size())
+        print('attn dist:', attn_dist.size())
+        vocab_dist = (1.0 - p_copy) * vocab_dist
+        attn_dist = p_copy * attn_dist
         if max_enc_oovs > 0:
-            extra_zeros = torch.zeros((batch_size, dec_seq_len, max_enc_oovs))
+            extra_zeros = torch.zeros((batch_size, dec_seq_len, max_enc_oovs), dtype=torch.float, device=torch.device('cuda'))
             vocab_dist_extended = torch.cat([vocab_dist, extra_zeros], dim=2)
         else:
             vocab_dist_extended = vocab_dist
@@ -56,7 +59,8 @@ def loss(target, vocab_dist, target_mask, use_copy=False,
         # 对于copy机制而言，enc_input中不存在任何unk了，因为所有的unk都会被新增的idx替代，构成一个oovs
         # target和dec_input中，如果遇到oovs中的词，会被替换成对应idx，但是仍有一些词会是unk
         attn_dist_by_step = [dist.squeeze(1) for dist in torch.split(attn_dist, 1, dim=1)]
-        attn_dist_projected = [torch.zeros(batch_size, extended_vsize).scatter_add_(1, enc_input_extended_vocab, attn_dist) for attn_dist in attn_dist_by_step]
+        attn_dist_projected = [torch.zeros(batch_size, extended_vsize, device=torch.device('cuda')).scatter_add_(1, enc_batch_extend_vocab, attn_dist) 
+                               for attn_dist in attn_dist_by_step]
         attn_dist = torch.stack(attn_dist_projected, dim=1)
         final_dist = vocab_dist_extended + attn_dist # [batch_size, dec_seq_len, extend_vsize]
     target_prob = torch.gather(final_dist, dim=2, index=target.unsqueeze(2)).squeeze(2) # [batch_size, dec_seq_len]
@@ -77,11 +81,11 @@ def main():
     target = torch.tensor([[2,5,7,1,4], [4,12,2,1,6]])
     target_mask = torch.tensor([[0,0,0,0,1], [0,0,0,0,1]], dtype=torch.uint8)
     max_enc_oovs = 10
-    p_gen = torch.rand(batch_size, dec_seq_len) 
+    p_copy = torch.rand(batch_size, dec_seq_len) 
     enc_input_extended_vocab = torch.tensor([[2,5,1,7,11], [12,6,5,8,3]])
             
     a = loss(target, vocab_dist, target_mask, use_copy=True,
-        attn_dist=attn_dist, p_gen=p_gen, enc_input_extended_vocab=enc_input_extended_vocab, max_enc_oovs=max_enc_oovs)
+        attn_dist=attn_dist, p_copy=p_copy, enc_input_extended_vocab=enc_input_extended_vocab, max_enc_oovs=max_enc_oovs)
     print(a)
 
 if __name__ == '__main__':

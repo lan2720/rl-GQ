@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 
 import torch
@@ -5,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from attention import Attention
-
+from utils import stable_softmax
 
 class Decoder(nn.Module):
 
@@ -52,6 +53,24 @@ class Decoder(nn.Module):
         embedded = self.embedding(input_var)
         embedded = self.input_dropout(embedded)
         
+        hehe = torch.isnan(embedded)
+        if torch.sum(hehe) > 0:
+            print('nan found in embedded:', embedded)
+            print('input:', input_var)
+            print('embed 0:', self.embedding.weight[0])
+            print('embed 1:', self.embedding.weight[1])
+            sys.exit()
+
+        hehe = torch.isnan(hidden[0])
+        if torch.sum(hehe) > 0:
+            print('nan found in hidden 0:', hidden[0])
+            sys.exit()
+
+        hehe = torch.isnan(hidden[1])
+        if torch.sum(hehe) > 0:
+            print('nan found in hidden 1:', hidden[1])
+            sys.exit()
+
         output, hidden = self.lstm(embedded, hidden)
 
         attn = None
@@ -60,9 +79,10 @@ class Decoder(nn.Module):
             # output ~ [ht, attn_ctx]
             output, attn = self.attention(output, encoder_outputs, encoder_mask)
         if self.use_copy:
-            p_copy = self.copy(torch.cat((output, embedded), dim=2).view(batch_size*dec_len, -1)).squeeze(1).view(batch_size, dec_len)
+            p_copy = F.sigmoid(self.copy(torch.cat((output, embedded), dim=2).view(batch_size*dec_len, -1))).squeeze(1).view(batch_size, dec_len)
 
-        predicted_softmax = F.softmax(self.out(output.contiguous().view(-1, self.hidden_dim)), dim=1).view(batch_size, dec_len, -1)
+        #predicted_softmax = F.softmax(self.out(output.contiguous().view(-1, self.hidden_dim)), dim=1).view(batch_size, dec_len, -1)
+        predicted_softmax = stable_softmax(self.out(output.contiguous().view(-1, self.hidden_dim))).view(batch_size, dec_len, -1)
         return predicted_softmax, hidden, attn, p_copy
 
     def forward(self, inputs=None, encoder_hidden=None, encoder_outputs=None, encoder_mask=None,
@@ -75,6 +95,17 @@ class Decoder(nn.Module):
             ret_dict[Decoder.KEY_COPY_PROB] = list()
 
         inputs, batch_size, max_length = self._validate_args(inputs, encoder_hidden, encoder_outputs, encoder_mask)
+        
+        hehe = torch.isnan(encoder_hidden[0])
+        if torch.sum(hehe) > 0:
+            print('nan found in enc hidden 0:', encoder_hidden[0])
+            sys.exit()
+
+        hehe = torch.isnan(encoder_hidden[1])
+        if torch.sum(hehe) > 0:
+            print('nan found in enc hidden 1:', encoder_hidden[1])
+            sys.exit()
+
         decoder_hidden = self._init_state(encoder_hidden)
 
         decoder_outputs = []
@@ -98,13 +129,13 @@ class Decoder(nn.Module):
             attn_dist = step_copy * step_attn
 
             if max_enc_oov > 0:
-                extra_zeros = torch.zeros((batch_size, max_enc_oov)) #, device=torch.device('cuda'))
+                extra_zeros = torch.zeros((batch_size, max_enc_oov), device=torch.device('cuda'))
                 vocab_dist_extended = torch.cat([vocab_dist, extra_zeros], dim=1)
             else:
                 vocab_dist_extended = vocab_dist
             extended_vsize = vocab_size + max_enc_oov
-            attn_dist_projected = torch.zeros(batch_size, extended_vsize#,
-                                              #device=torch.device('cuda')
+            attn_dist_projected = torch.zeros(batch_size, extended_vsize,
+                                              device=torch.device('cuda')
                                               ).scatter_add_(1, enc_inputs_extend_vocab, attn_dist)
 
             final_dist = vocab_dist_extended + attn_dist_projected

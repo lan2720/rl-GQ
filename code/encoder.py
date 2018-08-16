@@ -1,3 +1,4 @@
+import sys
 import torch
 import torch.nn as nn
 
@@ -24,8 +25,31 @@ class Encoder(nn.Module):
         batch_size, seq_len = input_var.size()
         embedded = self.embedding(input_var)
         embedded = self.input_dropout(embedded)
+        hehe = torch.isnan(embedded)
+        if torch.sum(hehe) > 0:
+            print('nan found in encoder embedded:', embedded)
+            print('enc input:', input_var)
+            print('embed 0:', self.embedding.weight[0])
+            print('embed 1:', self.embedding.weight[1])
+            sys.exit()
+
+
         embedded = nn.utils.rnn.pack_padded_sequence(embedded, input_length, batch_first=True)
         outputs, hidden = self.lstm(embedded)
+        
+        hehe = torch.isnan(hidden[0])
+        if torch.sum(hehe) > 0:
+            print('nan found in 1111 enc hidden 0:', hidden[0])
+            for i  in self.lstm.parameters():
+                print(i)
+            sys.exit()
+
+        hehe = torch.isnan(hidden[1])
+        if torch.sum(hehe) > 0:
+            print('nan found in 1111 enc hidden 1:', hidden[1])
+            sys.exit()
+
+
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
         
         if outputs.size(1) < seq_len:
